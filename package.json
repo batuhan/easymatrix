@@ -16,12 +16,14 @@
   },
   "files": [
     "dist",
+    "bin",
     "cli.mjs",
     "README.md"
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bunx tsc -p tsconfig.build.json",
+    "build:native": "./build-noweb.sh",
+    "build": "./build-noweb.sh && bunx tsc -p tsconfig.build.json",
     "typecheck": "bunx tsc -p tsconfig.json --noEmit",
     "test:types": "bunx tsc -p tsconfig.types.json --noEmit"
   },

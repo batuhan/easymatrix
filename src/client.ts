@@ -1,7 +1,7 @@
 import { BeeperDesktop, type ClientOptions } from "@beeper/desktop-api";
 
-import { type FetchLike } from "./native-fetch.js";
-import { EmbeddedRuntime, type EmbeddedRuntimeOptions } from "./runtime.js";
+import { createFetchFromNativeRequest, type FetchLike } from "./native-fetch.js";
+import { createRuntime, EmbeddedRuntime, type EmbeddedRuntimeOptions, type EmbeddedRealtimeConnection } from "./runtime.js";
 
 export type RuntimeInput = EmbeddedRuntime | EmbeddedRuntimeOptions | false;
 
@@ -16,6 +16,11 @@ export interface EmbeddedFetchHandle {
   runtime?: EmbeddedRuntime;
   baseURL?: string;
   close(): Promise<void>;
+}
+
+export interface EmbeddedRuntimeHandle extends EmbeddedFetchHandle {
+  connectRealtime(): Promise<EmbeddedRealtimeConnection>;
+  destroy(): Promise<void>;
 }
 
 export interface WithEmbeddedOptions {
@@ -46,7 +51,7 @@ function normalizeRuntime(runtime: RuntimeInput | undefined): { runtime?: Embedd
     return { runtime, owned: false };
   }
   return {
-    runtime: new EmbeddedRuntime(runtime ?? {}),
+    runtime: createRuntime(runtime ?? {}),
     owned: true,
   };
 }
@@ -75,14 +80,36 @@ export async function createEmbeddedFetch(
     await runtime.start();
   }
 
+  const resolvedFetch = runtime
+    ? createFetchFromNativeRequest((request) => runtime.request(request))
+    : resolveFetch(options.fetch);
+
   return {
-    fetch: resolveFetch(options.fetch),
+    fetch: options.fetch ?? resolvedFetch,
     runtime,
-    baseURL: runtime?.baseURL,
+    baseURL: runtime ? "http://embedded.invalid" : undefined,
     async close() {
       if (runtime && runtimeResolved.owned && runtime.status().running) {
-        await runtime.stop();
+        await runtime.destroy();
       }
+    },
+  };
+}
+
+export async function createRuntimeHandle(
+  options: CreateEmbeddedFetchOptions = {},
+): Promise<EmbeddedRuntimeHandle> {
+  const embedded = await createEmbeddedFetch(options);
+  return {
+    ...embedded,
+    async connectRealtime() {
+      if (!embedded.runtime) {
+        throw new Error("No embedded runtime is available.");
+      }
+      return embedded.runtime.connectRealtime();
+    },
+    async destroy() {
+      await embedded.close();
     },
   };
 }

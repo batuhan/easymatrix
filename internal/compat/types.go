@@ -22,6 +22,23 @@ type Chat struct {
 	Network string `json:"network,omitempty"`
 	// List chats includes an optional preview object.
 	Preview *Message `json:"preview,omitempty"`
+	// Desktop-side consumers treat marked unread separately from unreadCount.
+	IsMarkedUnread bool `json:"isMarkedUnread"`
+	// Low-priority is not in the public SDK schema, but Desktop consumers use it.
+	IsLowPriority bool `json:"isLowPriority,omitempty"`
+	// Extra metadata consumed by Desktop-side inbox/archive logic.
+	Extra *ChatExtra `json:"extra,omitempty"`
+	// Snooze metadata used by Desktop-side scheduling views.
+	Snooze *ChatSnooze `json:"snooze,omitempty"`
+}
+
+type ChatExtra struct {
+	MarkedUnreadUpdatedAt int64 `json:"markedUnreadUpdatedAt,omitempty"`
+}
+
+type ChatSnooze struct {
+	SnoozeUntilMS *int64 `json:"snoozeUntilMs,omitempty"`
+	UserSnoozedAt *int64 `json:"userSnoozedAt,omitempty"`
 }
 
 type ListChatsOutput struct {

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -37,6 +38,7 @@ const (
 	wsErrorType                  = "error"
 	wsErrorCodeInvalidCommand    = "INVALID_COMMAND"
 	wsErrorCodeInvalidPayload    = "INVALID_PAYLOAD"
+	wsErrorCodeNotSubscribed     = "NOT_SUBSCRIBED"
 	wsErrorCodeInternal          = "INTERNAL_ERROR"
 	wsWildcardSubscriptionChatID = "*"
 )
@@ -89,11 +91,44 @@ type wsClientState struct {
 	writeMu sync.Mutex
 }
 
+type realtimeSender func(any) error
+type realtimePinger func(context.Context) error
+type realtimeCloser func() error
+
+type wsClient struct {
+	id    uint64
+	state *wsClientState
+	send  realtimeSender
+	ping  realtimePinger
+	close realtimeCloser
+}
+
+type EmbeddedRealtimeConnection struct {
+	hub    *wsHub
+	id     uint64
+	closed atomic.Bool
+}
+
+func (c *EmbeddedRealtimeConnection) Send(rawPayload []byte) error {
+	if c == nil || c.closed.Load() {
+		return errors.New("realtime connection is closed")
+	}
+	return c.hub.processRawPayload(c.id, rawPayload)
+}
+
+func (c *EmbeddedRealtimeConnection) Close() {
+	if c == nil || c.closed.Swap(true) {
+		return
+	}
+	c.hub.unregister(c.id, true)
+}
+
 type wsHub struct {
 	server *Server
 
-	mu      sync.RWMutex
-	clients map[*websocket.Conn]*wsClientState
+	mu           sync.RWMutex
+	clients      map[uint64]*wsClient
+	nextClientID uint64
 
 	subscribeOnce sync.Once
 	subscribeErr  error
@@ -109,7 +144,7 @@ type wsHub struct {
 func newWSHub(server *Server) *wsHub {
 	return &wsHub{
 		server:             server,
-		clients:            make(map[*websocket.Conn]*wsClientState),
+		clients:            make(map[uint64]*wsClient),
 		eventQueue:         make(chan any, wsEventQueueSize),
 		recentFingerprints: make(map[string]time.Time),
 	}
@@ -154,37 +189,77 @@ func (h *wsHub) run() {
 
 func (h *wsHub) pingClients() {
 	h.mu.RLock()
-	clients := make([]*websocket.Conn, 0, len(h.clients))
-	for conn := range h.clients {
-		if conn != nil {
-			clients = append(clients, conn)
+	clients := make([]*wsClient, 0, len(h.clients))
+	for _, client := range h.clients {
+		if client != nil && client.ping != nil {
+			clients = append(clients, client)
 		}
 	}
 	h.mu.RUnlock()
 
-	for _, conn := range clients {
+	for _, client := range clients {
 		ctx, cancel := context.WithTimeout(context.Background(), wsPingTimeout)
-		_ = conn.Ping(ctx)
+		_ = client.ping(ctx)
 		cancel()
 	}
 }
 
-func (h *wsHub) register(conn *websocket.Conn, state *wsClientState) {
+func (h *wsHub) register(send realtimeSender, ping realtimePinger, close realtimeCloser) uint64 {
 	h.mu.Lock()
-	h.clients[conn] = state
-	h.mu.Unlock()
+	defer h.mu.Unlock()
+	h.nextClientID++
+	id := h.nextClientID
+	h.clients[id] = &wsClient{
+		id:    id,
+		state: &wsClientState{chatIDs: []string{}},
+		send:  send,
+		ping:  ping,
+		close: close,
+	}
+	return id
 }
 
-func (h *wsHub) unregister(conn *websocket.Conn) {
-	h.mu.Lock()
-	delete(h.clients, conn)
-	h.mu.Unlock()
+func (h *wsHub) open(send realtimeSender, ping realtimePinger, close realtimeCloser) (*EmbeddedRealtimeConnection, error) {
+	if err := h.ensureSubscription(); err != nil {
+		return nil, err
+	}
+	id := h.register(send, ping, close)
+	client := h.client(id)
+	if client == nil {
+		return nil, errors.New("failed to register realtime client")
+	}
+	h.write(client, wsReadyMessage{
+		Type:    wsReadyType,
+		Version: 1,
+		ChatIDs: []string{},
+	})
+	return &EmbeddedRealtimeConnection{hub: h, id: id}, nil
 }
 
-func (h *wsHub) setSubscriptions(conn *websocket.Conn, chatIDs []string) {
+func (s *Server) OpenEmbeddedRealtime(send realtimeSender) (*EmbeddedRealtimeConnection, error) {
+	return s.ws.open(send, nil, nil)
+}
+
+func (h *wsHub) client(id uint64) *wsClient {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.clients[id]
+}
+
+func (h *wsHub) unregister(id uint64, shouldClose bool) {
 	h.mu.Lock()
-	if state, ok := h.clients[conn]; ok {
-		state.chatIDs = chatIDs
+	client := h.clients[id]
+	delete(h.clients, id)
+	h.mu.Unlock()
+	if shouldClose && client != nil && client.close != nil {
+		_ = client.close()
+	}
+}
+
+func (h *wsHub) setSubscriptions(id uint64, chatIDs []string) {
+	h.mu.Lock()
+	if client, ok := h.clients[id]; ok && client.state != nil {
+		client.state.chatIDs = chatIDs
 	}
 	h.mu.Unlock()
 }
@@ -212,6 +287,9 @@ func (h *wsHub) processSyncComplete(syncComplete *jsoncmd.SyncComplete) {
 		}
 
 		for _, target := range targets {
+			if target == nil || target.state == nil {
+				continue
+			}
 			target.state.seq++
 			payload := wsDomainEventMessage{
 				Type:   domainEvent.Type,
@@ -223,27 +301,22 @@ func (h *wsHub) processSyncComplete(syncComplete *jsoncmd.SyncComplete) {
 			if len(entries) > 0 {
 				payload.Entries = entries
 			}
-			h.write(target.conn, target.state, payload)
+			h.write(target, payload)
 		}
 	}
 }
 
-type wsTarget struct {
-	conn  *websocket.Conn
-	state *wsClientState
-}
-
-func (h *wsHub) subscribedTargets(chatID string) []wsTarget {
+func (h *wsHub) subscribedTargets(chatID string) []*wsClient {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	output := make([]wsTarget, 0, len(h.clients))
-	for conn, state := range h.clients {
-		if conn == nil || state == nil {
+	output := make([]*wsClient, 0, len(h.clients))
+	for _, client := range h.clients {
+		if client == nil || client.state == nil {
 			continue
 		}
-		if isWSSubscribed(state.chatIDs, chatID) {
-			output = append(output, wsTarget{conn: conn, state: state})
+		if isWSSubscribed(client.state.chatIDs, chatID) {
+			output = append(output, client)
 		}
 	}
 	return output
@@ -273,20 +346,16 @@ func (h *wsHub) pruneFingerprintsLocked(now time.Time) {
 	}
 }
 
-func (h *wsHub) write(conn *websocket.Conn, state *wsClientState, payload any) {
-	if conn == nil || state == nil {
+func (h *wsHub) write(client *wsClient, payload any) {
+	if client == nil || client.state == nil || client.send == nil {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), wsDefaultWriteTimeout)
-	defer cancel()
-
-	state.writeMu.Lock()
-	err := wsjson.Write(ctx, conn, payload)
-	state.writeMu.Unlock()
+	client.state.writeMu.Lock()
+	err := client.send(payload)
+	client.state.writeMu.Unlock()
 	if err != nil {
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-		h.unregister(conn)
+		h.unregister(client.id, true)
 	}
 }
 
@@ -372,10 +441,6 @@ func toCompatRecord(value any) (compatRecord, error) {
 }
 
 func (s *Server) wsEvents(w http.ResponseWriter, r *http.Request) error {
-	if err := s.ws.ensureSubscription(); err != nil {
-		return err
-	}
-
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		CompressionMode: websocket.CompressionDisabled,
 		OriginPatterns:  []string{"*"},
@@ -385,18 +450,19 @@ func (s *Server) wsEvents(w http.ResponseWriter, r *http.Request) error {
 	}
 	conn.SetReadLimit(wsReadLimitBytes)
 
-	state := &wsClientState{chatIDs: []string{}}
-	s.ws.register(conn, state)
-	defer func() {
-		s.ws.unregister(conn)
-		_ = conn.Close(websocket.StatusNormalClosure, "")
-	}()
-
-	s.ws.write(conn, state, wsReadyMessage{
-		Type:    wsReadyType,
-		Version: 1,
-		ChatIDs: []string{},
+	realtime, err := s.ws.open(func(payload any) error {
+		ctx, cancel := context.WithTimeout(context.Background(), wsDefaultWriteTimeout)
+		defer cancel()
+		return wsjson.Write(ctx, conn, payload)
+	}, func(ctx context.Context) error {
+		return conn.Ping(ctx)
+	}, func() error {
+		return conn.Close(websocket.StatusNormalClosure, "")
 	})
+	if err != nil {
+		return err
+	}
+	defer realtime.Close()
 
 	for {
 		messageType, rawPayload, readErr := conn.Read(r.Context())
@@ -404,110 +470,119 @@ func (s *Server) wsEvents(w http.ResponseWriter, r *http.Request) error {
 			return nil
 		}
 		if messageType != websocket.MessageText {
-			s.ws.write(conn, state, wsErrorMessage{
+			ctx, cancel := context.WithTimeout(context.Background(), wsDefaultWriteTimeout)
+			_ = wsjson.Write(ctx, conn, wsErrorMessage{
 				Type:    wsErrorType,
 				Code:    wsErrorCodeInvalidPayload,
-				Message: "Payload must be an object with a type field",
+				Message: "Payload must be a JSON text message",
 			})
+			cancel()
 			continue
 		}
+		if err = realtime.Send(rawPayload); err != nil {
+			return nil
+		}
+	}
+}
 
-		var payload any
-		if err = json.Unmarshal(rawPayload, &payload); err != nil {
-			s.ws.write(conn, state, wsErrorMessage{
-				Type:    wsErrorType,
-				Code:    wsErrorCodeInvalidPayload,
-				Message: "Invalid JSON payload",
-			})
-			continue
-		}
-		payloadObject, ok := payload.(map[string]any)
-		if !ok {
-			s.ws.write(conn, state, wsErrorMessage{
-				Type:    wsErrorType,
-				Code:    wsErrorCodeInvalidPayload,
-				Message: "Payload must be an object with a type field",
-			})
-			continue
-		}
+func (h *wsHub) processRawPayload(clientID uint64, rawPayload []byte) error {
+	client := h.client(clientID)
+	if client == nil {
+		return errors.New("realtime client not found")
+	}
 
-		msgTypeRaw, hasType := payloadObject["type"]
-		msgType, typeOK := msgTypeRaw.(string)
-		requestID, _ := payloadObject["requestID"].(string)
-		if !hasType || !typeOK {
-			s.ws.write(conn, state, wsErrorMessage{
-				Type:      wsErrorType,
-				RequestID: requestID,
-				Code:      wsErrorCodeInvalidPayload,
-				Message:   "Payload must be an object with a type field",
-			})
-			continue
-		}
-		if msgType != wsSubscriptionsCommandType {
-			s.ws.write(conn, state, wsErrorMessage{
-				Type:      wsErrorType,
-				RequestID: requestID,
-				Code:      wsErrorCodeInvalidCommand,
-				Message:   "Unsupported command type: " + msgType,
-			})
-			continue
-		}
-		hasUnexpectedKey := false
-		for key := range payloadObject {
-			if key != "type" && key != "requestID" && key != "chatIDs" {
-				hasUnexpectedKey = true
-				break
-			}
-		}
-		if hasUnexpectedKey {
-			s.ws.write(conn, state, wsErrorMessage{
+	var payload any
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		h.write(client, wsErrorMessage{
+			Type:    wsErrorType,
+			Code:    wsErrorCodeInvalidPayload,
+			Message: "Invalid JSON payload",
+		})
+		return nil
+	}
+	payloadObject, ok := payload.(map[string]any)
+	if !ok {
+		h.write(client, wsErrorMessage{
+			Type:    wsErrorType,
+			Code:    wsErrorCodeInvalidPayload,
+			Message: "Payload must be an object with a type field",
+		})
+		return nil
+	}
+
+	msgTypeRaw, hasType := payloadObject["type"]
+	msgType, typeOK := msgTypeRaw.(string)
+	requestID, _ := payloadObject["requestID"].(string)
+	if !hasType || !typeOK {
+		h.write(client, wsErrorMessage{
+			Type:      wsErrorType,
+			RequestID: requestID,
+			Code:      wsErrorCodeInvalidPayload,
+			Message:   "Payload must be an object with a type field",
+		})
+		return nil
+	}
+	if msgType != wsSubscriptionsCommandType {
+		h.write(client, wsErrorMessage{
+			Type:      wsErrorType,
+			RequestID: requestID,
+			Code:      wsErrorCodeInvalidCommand,
+			Message:   "Unsupported command type: " + msgType,
+		})
+		return nil
+	}
+
+	for key := range payloadObject {
+		if key != "type" && key != "requestID" && key != "chatIDs" {
+			h.write(client, wsErrorMessage{
 				Type:      wsErrorType,
 				RequestID: requestID,
 				Code:      wsErrorCodeInvalidPayload,
 				Message:   "Invalid subscriptions payload",
 			})
-			continue
+			return nil
 		}
-		if rawRequestID, ok := payloadObject["requestID"]; ok {
-			if _, castOK := rawRequestID.(string); !castOK {
-				s.ws.write(conn, state, wsErrorMessage{
-					Type:      wsErrorType,
-					RequestID: requestID,
-					Code:      wsErrorCodeInvalidPayload,
-					Message:   "requestID must be a string",
-				})
-				continue
-			}
-		}
-
-		chatIDs, ok := decodeWSChatIDs(payloadObject["chatIDs"])
-		if !ok {
-			s.ws.write(conn, state, wsErrorMessage{
-				Type:      wsErrorType,
-				RequestID: requestID,
-				Code:      wsErrorCodeInvalidPayload,
-				Message:   "chatIDs must be an array of strings",
-			})
-			continue
-		}
-		normalized, valid := normalizeWSChatIDs(chatIDs)
-		if !valid {
-			s.ws.write(conn, state, wsErrorMessage{
-				Type:      wsErrorType,
-				RequestID: requestID,
-				Code:      wsErrorCodeInvalidPayload,
-				Message:   "chatIDs cannot combine '*' with specific IDs",
-			})
-			continue
-		}
-
-		s.ws.setSubscriptions(conn, normalized)
-		s.ws.write(conn, state, wsSubscriptionsUpdatedMessage{
-			Type:      wsSubscriptionsUpdatedType,
-			RequestID: requestID,
-			ChatIDs:   normalized,
-		})
 	}
+	if rawRequestID, ok := payloadObject["requestID"]; ok {
+		if _, castOK := rawRequestID.(string); !castOK {
+			h.write(client, wsErrorMessage{
+				Type:      wsErrorType,
+				RequestID: requestID,
+				Code:      wsErrorCodeInvalidPayload,
+				Message:   "requestID must be a string",
+			})
+			return nil
+		}
+	}
+
+	chatIDs, ok := decodeWSChatIDs(payloadObject["chatIDs"])
+	if !ok {
+		h.write(client, wsErrorMessage{
+			Type:      wsErrorType,
+			RequestID: requestID,
+			Code:      wsErrorCodeInvalidPayload,
+			Message:   "chatIDs must be an array of strings",
+		})
+		return nil
+	}
+	normalized, valid := normalizeWSChatIDs(chatIDs)
+	if !valid {
+		h.write(client, wsErrorMessage{
+			Type:      wsErrorType,
+			RequestID: requestID,
+			Code:      wsErrorCodeInvalidPayload,
+			Message:   "chatIDs cannot combine '*' with specific IDs",
+		})
+		return nil
+	}
+
+	h.setSubscriptions(clientID, normalized)
+	h.write(client, wsSubscriptionsUpdatedMessage{
+		Type:      wsSubscriptionsUpdatedType,
+		RequestID: requestID,
+		ChatIDs:   normalized,
+	})
+	return nil
 }
 
 func decodeWSChatIDs(raw any) ([]string, bool) {
@@ -705,6 +780,20 @@ func normalizeForFingerprint(value any) any {
 			output = append(output, normalizeForFingerprint(item))
 		}
 		return output
+	case compatRecord:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			if key == "ts" || key == "timestamp" {
+				continue
+			}
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		normalized := make(map[string]any, len(keys))
+		for _, key := range keys {
+			normalized[key] = normalizeForFingerprint(typed[key])
+		}
+		return normalized
 	case map[string]any:
 		keys := make([]string, 0, len(typed))
 		for key := range typed {

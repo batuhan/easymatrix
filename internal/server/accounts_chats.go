@@ -54,15 +54,88 @@ type accountLookup struct {
 }
 
 type roomAccountDataState struct {
-	IsArchived    bool
-	IsMuted       bool
-	IsPinned      bool
-	IsLowPriority bool
+	IsMuted               bool
+	IsPinned              bool
+	IsLowPriority         bool
+	IsMarkedUnread        bool
+	MarkedUnreadUpdatedAt int64
+	ArchivedUpdatedTS     *int64
+	ArchivedAtOrder       *int64
+	SnoozeUntilMS         *int64
+	UserSnoozedAt         *int64
 }
 
 type beeperInboxDoneContent struct {
 	UpdatedTS *int64 `json:"updated_ts,omitempty"`
 	AtOrder   *int64 `json:"at_order,omitempty"`
+}
+
+type markedUnreadContent struct {
+	Unread bool  `json:"unread"`
+	TS     int64 `json:"ts,omitempty"`
+}
+
+type snoozedContent struct {
+	SnoozedUntilMS *int64 `json:"snoozed_until_ms,omitempty"`
+	UserSnoozedAt  *int64 `json:"user_snoozed_at,omitempty"`
+}
+
+func (s roomAccountDataState) EffectiveArchived() bool {
+	if s.MarkedUnreadUpdatedAt > 0 {
+		if s.ArchivedUpdatedTS != nil && *s.ArchivedUpdatedTS < s.MarkedUnreadUpdatedAt {
+			return false
+		}
+		if s.ArchivedUpdatedTS == nil && s.ArchivedAtOrder == nil {
+			return false
+		}
+	}
+	return s.ArchivedUpdatedTS != nil || s.ArchivedAtOrder != nil
+}
+
+func (s roomAccountDataState) HasUnread() bool {
+	return s.IsMarkedUnread
+}
+
+func applyRoomAccountDataContent(state roomAccountDataState, eventType string, content []byte) roomAccountDataState {
+	switch eventType {
+	case event.AccountDataRoomTags.Type:
+		var tags event.TagEventContent
+		if unmarshalErr := json.Unmarshal(content, &tags); unmarshalErr != nil {
+			return state
+		}
+		_, state.IsPinned = tags.Tags[event.RoomTagFavourite]
+		_, state.IsLowPriority = tags.Tags[event.RoomTagLowPriority]
+	case event.AccountDataBeeperMute.Type:
+		var mute event.BeeperMuteEventContent
+		if unmarshalErr := json.Unmarshal(content, &mute); unmarshalErr != nil {
+			return state
+		}
+		state.IsMuted = mute.IsMuted()
+	case "com.beeper.inbox.done":
+		var done beeperInboxDoneContent
+		if unmarshalErr := json.Unmarshal(content, &done); unmarshalErr != nil {
+			return state
+		}
+		state.ArchivedUpdatedTS = done.UpdatedTS
+		state.ArchivedAtOrder = done.AtOrder
+	case "m.marked_unread":
+		var unread markedUnreadContent
+		if unmarshalErr := json.Unmarshal(content, &unread); unmarshalErr != nil {
+			return state
+		}
+		state.IsMarkedUnread = unread.Unread
+		state.MarkedUnreadUpdatedAt = unread.TS
+	case "com.beeper.chats.snoozed":
+		var snoozed snoozedContent
+		if unmarshalErr := json.Unmarshal(content, &snoozed); unmarshalErr != nil {
+			return state
+		}
+		state.SnoozeUntilMS = snoozed.SnoozedUntilMS
+		state.UserSnoozedAt = snoozed.UserSnoozedAt
+	case "com.famedly.marked_unread":
+		// Ignored in Beeper Desktop as well.
+	}
+	return state
 }
 
 func (s *Server) getAccounts(w http.ResponseWriter, r *http.Request) error {
@@ -362,28 +435,7 @@ func (s *Server) loadRoomAccountDataStates(ctx context.Context) (map[id.RoomID]r
 		}
 		roomID := id.RoomID(roomIDRaw)
 		state := states[roomID]
-		switch eventType {
-		case event.AccountDataRoomTags.Type:
-			var tags event.TagEventContent
-			if unmarshalErr := json.Unmarshal(content, &tags); unmarshalErr != nil {
-				break
-			}
-			_, state.IsPinned = tags.Tags[event.RoomTagFavourite]
-			_, state.IsLowPriority = tags.Tags[event.RoomTagLowPriority]
-		case event.AccountDataBeeperMute.Type:
-			var mute event.BeeperMuteEventContent
-			if unmarshalErr := json.Unmarshal(content, &mute); unmarshalErr != nil {
-				break
-			}
-			state.IsMuted = mute.IsMuted()
-		case "com.beeper.inbox.done":
-			var done beeperInboxDoneContent
-			if unmarshalErr := json.Unmarshal(content, &done); unmarshalErr != nil {
-				break
-			}
-			state.IsArchived = done.UpdatedTS != nil || done.AtOrder != nil
-		}
-		states[roomID] = state
+		states[roomID] = applyRoomAccountDataContent(state, eventType, content)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, errs.Internal(fmt.Errorf("room account data query failed: %w", err))
@@ -449,9 +501,22 @@ func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup 
 		Total:   int64(total),
 	}
 	chat.UnreadCount = int64(room.UnreadMessages)
-	chat.IsArchived = roomState.IsArchived
+	chat.IsArchived = roomState.EffectiveArchived()
 	chat.IsMuted = roomState.IsMuted
 	chat.IsPinned = roomState.IsPinned
+	chat.IsMarkedUnread = roomState.IsMarkedUnread
+	chat.IsLowPriority = roomState.IsLowPriority
+	if roomState.MarkedUnreadUpdatedAt > 0 {
+		chat.Extra = &compat.ChatExtra{
+			MarkedUnreadUpdatedAt: roomState.MarkedUnreadUpdatedAt,
+		}
+	}
+	if roomState.SnoozeUntilMS != nil || roomState.UserSnoozedAt != nil {
+		chat.Snooze = &compat.ChatSnooze{
+			SnoozeUntilMS: roomState.SnoozeUntilMS,
+			UserSnoozedAt: roomState.UserSnoozedAt,
+		}
+	}
 
 	if ts := room.SortingTimestamp.UnixMilli(); ts > 0 {
 		chat.LastActivity = time.UnixMilli(ts).UTC()

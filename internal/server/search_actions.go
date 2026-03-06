@@ -1186,7 +1186,7 @@ func (s *Server) searchChatsCore(ctx context.Context, params searchChatsParams) 
 		if params.Inbox != "" {
 			switch params.Inbox {
 			case "primary":
-				if state.IsArchived || state.IsLowPriority {
+				if state.EffectiveArchived() || state.IsLowPriority {
 					continue
 				}
 			case "low-priority":
@@ -1194,7 +1194,7 @@ func (s *Server) searchChatsCore(ctx context.Context, params searchChatsParams) 
 					continue
 				}
 			case "archive":
-				if !state.IsArchived {
+				if !state.EffectiveArchived() {
 					continue
 				}
 			}
@@ -1210,7 +1210,7 @@ func (s *Server) searchChatsCore(ctx context.Context, params searchChatsParams) 
 		if params.Type != "any" && params.Type != "" && string(chat.Type) != params.Type {
 			continue
 		}
-		if params.UnreadOnly && chat.UnreadCount <= 0 {
+		if params.UnreadOnly && chat.UnreadCount <= 0 && !chat.IsMarkedUnread {
 			continue
 		}
 		if params.LastActivityBefore != nil && mustParseRFC3339(chat.LastActivity) >= params.LastActivityBefore.UnixMilli() {

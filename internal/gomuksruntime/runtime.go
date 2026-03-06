@@ -66,6 +66,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 func (r *Runtime) Stop() {
 	if r.gmx != nil {
 		r.gmx.DirectStop()
+		r.gmx = nil
 	}
 }
 

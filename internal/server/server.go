@@ -91,7 +91,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /focus/{chatID}/{messageID}", s.public(s.focusPage))
 
 	s.handle(mux, "GET /v1/accounts", s.getAccounts, false, "read")
-	s.handle(mux, "GET /v0/get-accounts", s.getAccounts, false, "read")
 
 	s.handle(mux, "GET /v1/chats", s.listChats, false, "read")
 	s.handle(mux, "POST /v1/chats", s.createChat, false, "write")
@@ -107,31 +106,17 @@ func (s *Server) Handler() http.Handler {
 	s.handle(mux, "POST /v1/chats/{chatID}/messages/{messageID}/reactions", s.addReaction, false, "write")
 	s.handle(mux, "DELETE /v1/chats/{chatID}/messages/{messageID}/reactions", s.removeReaction, false, "write")
 	s.handle(mux, "GET /v1/messages/search", s.searchMessages, false, "read")
-	s.handle(mux, "GET /v0/search-messages", s.searchMessages, false, "read")
-	s.handle(mux, "GET /v0/search-chats", s.searchChats, false, "read")
-	s.handle(mux, "GET /v0/get-chat", s.getChat, false, "read")
-	s.handle(mux, "POST /v0/create-chat", s.createChat, false, "write")
-	s.handle(mux, "POST /v0/archive-chat", s.archiveChat, false, "write")
-	s.handle(mux, "POST /v0/set-chat-reminder", s.setChatReminder, false, "write")
-	s.handle(mux, "POST /v0/clear-chat-reminder", s.clearChatReminder, false, "write")
-	s.handle(mux, "POST /v0/send-message", s.sendMessage, false, "write")
 	s.handle(mux, "GET /v1/ws", s.wsEvents, true, "read")
-	s.handle(mux, "GET /ws", s.wsEvents, true, "read")
 
 	s.handle(mux, "POST /v1/assets/download", s.downloadAsset, false, "read")
-	s.handle(mux, "POST /v0/download-asset", s.downloadAsset, false, "read")
 	s.handle(mux, "GET /v1/assets/serve", s.serveAsset, true, "read")
 	s.handle(mux, "POST /v1/assets/upload", s.uploadAsset, false, "write")
 	s.handle(mux, "POST /v1/assets/upload/base64", s.uploadAsset, false, "write")
 
 	s.handle(mux, "GET /v1/accounts/{accountID}/contacts", s.searchContacts, false, "read")
-	s.handle(mux, "GET /v0/search-users", s.searchUsersV0, false, "read")
 	s.handle(mux, "GET /v1/accounts/{accountID}/contacts/list", s.listContacts, false, "read")
 	s.handle(mux, "GET /v1/search", s.search, false, "read")
-	s.handle(mux, "GET /v0/search", s.search, false, "read")
 	s.handle(mux, "POST /v1/focus", s.focusApp, false, "read")
-	s.handle(mux, "POST /v0/focus-app", s.focusApp, false, "read")
-	s.handle(mux, "POST /v0/open-app", s.focusApp, false, "read")
 
 	return mux
 }

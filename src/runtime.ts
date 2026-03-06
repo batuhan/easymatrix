@@ -2,187 +2,381 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { NativeRequest, NativeResponse } from "./native-fetch.js";
+
 export interface EmbeddedRuntimeOptions {
-  command?: string[];
-  cwd?: string;
-  env?: Record<string, string>;
-  listenAddr?: string;
+  nativeLibraryPath?: string;
   accessToken?: string;
   stateDir?: string;
-  startupTimeoutMs?: number;
-  pollIntervalMs?: number;
-  inheritStdio?: boolean;
+  allowQueryTokenAuth?: boolean;
+  beeperHomeserverURL?: string;
+  beeperUsername?: string;
+  beeperPassword?: string;
+  beeperRecoveryKey?: string;
 }
 
 export interface EmbeddedRuntimeStatus {
-  baseURL: string;
-  listenAddr: string;
   running: boolean;
+  stateDir?: string;
+  nativeLibraryPath: string;
 }
 
-const DEFAULT_LISTEN_ADDR = "127.0.0.1:23373";
-const DEFAULT_STARTUP_TIMEOUT_MS = 20_000;
-const DEFAULT_POLL_INTERVAL_MS = 250;
+export interface EmbeddedRealtimeConnection extends EventTarget {
+  readonly closed: boolean;
+  send(payload: string | Record<string, unknown>): void;
+  close(): void;
+  onmessage: ((event: MessageEvent<string>) => void) | null;
+  onclose: ((event: Event) => void) | null;
+  onerror: ((event: ErrorEvent) => void) | null;
+}
+
+interface RuntimeConfigPayload {
+  accessToken?: string;
+  stateDir?: string;
+  allowQueryTokenAuth?: boolean;
+  beeperHomeserverUrl?: string;
+  beeperUsername?: string;
+  beeperPassword?: string;
+  beeperRecoveryKey?: string;
+}
+
+interface FFIResponsePayload {
+  error?: string;
+  status?: number;
+  statusText?: string;
+  headers?: Record<string, string[]>;
+  body_base64?: string;
+}
+
+type BunFFIModule = typeof import("bun:ffi");
 
 const RUNTIME_FILE_DIR = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = resolve(RUNTIME_FILE_DIR, "..");
-const DEFAULT_BIN_PATH = resolve(DEFAULT_REPO_ROOT, "bin", "easymatrix");
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolveDelay) => {
-    setTimeout(resolveDelay, ms);
-  });
+function assertBunRuntime(): void {
+  if (typeof Bun === "undefined") {
+    throw new Error("Embedded runtime is Bun-only. Use the HTTP server mode outside Bun.");
+  }
 }
 
-function listenAddrToBaseURL(listenAddr: string): string {
-  if (listenAddr.startsWith("http://") || listenAddr.startsWith("https://")) {
-    return listenAddr;
-  }
-  return `http://${listenAddr}`;
+function defaultNativeLibraryPath(suffix: string): string {
+  return resolve(DEFAULT_REPO_ROOT, "bin", `libeasymatrixffi.${suffix}`);
 }
 
-function resolveCommandAndCWD(options: EmbeddedRuntimeOptions): { command: string[]; cwd?: string } {
-  if (options.command && options.command.length > 0) {
-    return {
-      command: options.command,
-      cwd: options.cwd,
-    };
+function decodeBody(bodyBase64?: string): Uint8Array | undefined {
+  if (!bodyBase64) {
+    return undefined;
+  }
+  return new Uint8Array(Buffer.from(bodyBase64, "base64"));
+}
+
+function encodeBody(body?: Uint8Array | ArrayBuffer | string | null): string | undefined {
+  if (body == null) {
+    return undefined;
+  }
+  if (typeof body === "string") {
+    return Buffer.from(body).toString("base64");
+  }
+  const bytes = body instanceof Uint8Array ? body : new Uint8Array(body);
+  return Buffer.from(bytes).toString("base64");
+}
+
+function normalizeHeaders(headers?: Record<string, string | readonly string[]>): Record<string, string[]> | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  const out: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    out[key] = typeof value === "string" ? [value] : [...value];
+  }
+  return out;
+}
+
+class RealtimeConnection extends EventTarget implements EmbeddedRealtimeConnection {
+  private _onmessage: ((event: MessageEvent<string>) => void) | null = null;
+  onclose: ((event: Event) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  closed = false;
+  private readonly backlog: string[] = [];
+
+  constructor(
+    private readonly runtime: EmbeddedRuntime,
+    private readonly id: bigint,
+  ) {
+    super();
   }
 
-  if (existsSync(DEFAULT_BIN_PATH)) {
-    return {
-      command: [DEFAULT_BIN_PATH],
-      cwd: options.cwd,
-    };
+  get onmessage(): ((event: MessageEvent<string>) => void) | null {
+    return this._onmessage;
   }
 
-  return {
-    command: ["go", "run", "./cmd/server"],
-    cwd: options.cwd ?? DEFAULT_REPO_ROOT,
-  };
+  set onmessage(value: ((event: MessageEvent<string>) => void) | null) {
+    this._onmessage = value;
+    if (!value || this.backlog.length === 0) {
+      return;
+    }
+    const pending = this.backlog.splice(0);
+    for (const raw of pending) {
+      const evt = new MessageEvent("message", { data: raw });
+      this.dispatchEvent(evt);
+      value(evt);
+    }
+  }
+
+  send(payload: string | Record<string, unknown>): void {
+    if (this.closed) {
+      throw new Error("Realtime connection is closed.");
+    }
+    const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
+    this.runtime.sendRealtime(this.id, raw);
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.runtime.closeRealtime(this.id);
+    const evt = new Event("close");
+    this.dispatchEvent(evt);
+    this.onclose?.(evt);
+  }
+
+  dispatchMessage(raw: string): void {
+    if (this.closed) {
+      return;
+    }
+    if (!this._onmessage) {
+      this.backlog.push(raw);
+      return;
+    }
+    const evt = new MessageEvent("message", { data: raw });
+    this.dispatchEvent(evt);
+    this._onmessage?.(evt);
+  }
+
+  dispatchError(error: Error): void {
+    if (this.closed) {
+      return;
+    }
+    const evt = new ErrorEvent("error", { error, message: error.message });
+    this.dispatchEvent(evt);
+    this.onerror?.(evt);
+  }
 }
 
 export class EmbeddedRuntime {
   readonly options: Readonly<EmbeddedRuntimeOptions>;
-  readonly listenAddr: string;
-  readonly baseURL: string;
 
-  private process?: Bun.Subprocess;
+  private handle?: bigint;
+  private ffi?: BunFFIModule;
+  private lib?: any;
+  private realtimeCallback?: any;
+  private readonly realtimeConnections = new Map<bigint, RealtimeConnection>();
+  private resolvedNativeLibraryPath?: string;
 
   constructor(options: EmbeddedRuntimeOptions = {}) {
     this.options = options;
-    this.listenAddr = options.listenAddr ?? DEFAULT_LISTEN_ADDR;
-    this.baseURL = listenAddrToBaseURL(this.listenAddr);
   }
 
   status(): EmbeddedRuntimeStatus {
     return {
-      baseURL: this.baseURL,
-      listenAddr: this.listenAddr,
-      running: Boolean(this.process && this.process.exitCode == null),
+      running: this.handle != null,
+      stateDir: this.options.stateDir,
+      nativeLibraryPath: this.resolvedNativeLibraryPath ?? this.options.nativeLibraryPath ?? "",
     };
   }
 
   async start(): Promise<void> {
-    if (this.process && this.process.exitCode == null) {
+    if (this.handle != null) {
       return;
     }
-
-    const commandAndCWD = resolveCommandAndCWD(this.options);
-
-    const env: Record<string, string> = {
-      ...Bun.env,
-      ...this.options.env,
-      BEEPER_API_LISTEN: this.listenAddr,
-    };
-    if (this.options.accessToken) {
-      env.BEEPER_ACCESS_TOKEN = this.options.accessToken;
-    }
-    if (this.options.stateDir) {
-      env.BEEPER_STATE_DIR = this.options.stateDir;
+    assertBunRuntime();
+    const ffi = await import("bun:ffi");
+    const nativeLibraryPath = this.options.nativeLibraryPath ?? defaultNativeLibraryPath(ffi.suffix);
+    if (!existsSync(nativeLibraryPath)) {
+      throw new Error(`Native library not found at ${nativeLibraryPath}. Build bin/libeasymatrixffi.${ffi.suffix} first.`);
     }
 
-    this.process = Bun.spawn(commandAndCWD.command, {
-      cwd: commandAndCWD.cwd,
-      env,
-      stdout: this.options.inheritStdio ? "inherit" : "pipe",
-      stderr: this.options.inheritStdio ? "inherit" : "pipe",
+    const lib: any = ffi.dlopen(nativeLibraryPath, {
+      EasyMatrixCreate: {
+        args: ["cstring"],
+        returns: "u64",
+      },
+      EasyMatrixStart: {
+        args: ["u64"],
+        returns: "i32",
+      },
+      EasyMatrixStop: {
+        args: ["u64"],
+        returns: "void",
+      },
+      EasyMatrixDestroy: {
+        args: ["u64"],
+        returns: "void",
+      },
+      EasyMatrixHandleRequest: {
+        args: ["u64", "cstring"],
+        returns: "ptr",
+      },
+      EasyMatrixRealtimeConnect: {
+        args: ["u64", "function"],
+        returns: "u64",
+      },
+      EasyMatrixRealtimeSend: {
+        args: ["u64", "u64", "cstring"],
+        returns: "ptr",
+      },
+      EasyMatrixRealtimeClose: {
+        args: ["u64", "u64"],
+        returns: "void",
+      },
+      EasyMatrixFreeCString: {
+        args: ["ptr"],
+        returns: "void",
+      },
     });
 
-    try {
-      await this.waitForReady();
-    } catch (error) {
-      this.stop().catch(() => {
-        // ignore cleanup failures on startup errors
-      });
-      throw error;
+    const realtimeCallback = new ffi.JSCallback(
+      (realtimeID: bigint, payloadPtr: any) => {
+        if (!payloadPtr) {
+          return;
+        }
+        try {
+          const payload = String(new ffi.CString(payloadPtr));
+          const connection = this.realtimeConnections.get(realtimeID);
+          connection?.dispatchMessage(payload);
+        } finally {
+          lib.symbols.EasyMatrixFreeCString(payloadPtr);
+        }
+      },
+      {
+        args: ["u64", "ptr"],
+        returns: "void",
+      },
+    );
+
+    const cfgPayload: RuntimeConfigPayload = {
+      accessToken: this.options.accessToken,
+      stateDir: this.options.stateDir,
+      allowQueryTokenAuth: this.options.allowQueryTokenAuth,
+      beeperHomeserverUrl: this.options.beeperHomeserverURL,
+      beeperUsername: this.options.beeperUsername,
+      beeperPassword: this.options.beeperPassword,
+      beeperRecoveryKey: this.options.beeperRecoveryKey,
+    };
+    const rawHandle = lib.symbols.EasyMatrixCreate(JSON.stringify(cfgPayload));
+    const handle = rawHandle ? BigInt(rawHandle) : 0n;
+    if (!handle) {
+      realtimeCallback.close();
+      lib.close();
+      throw new Error("Failed to create embedded runtime.");
     }
+    const startResult = lib.symbols.EasyMatrixStart(handle);
+    if (startResult !== 0) {
+      lib.symbols.EasyMatrixDestroy(handle);
+      realtimeCallback.close();
+      lib.close();
+      throw new Error(`Embedded runtime failed to start (code ${startResult}).`);
+    }
+
+    this.ffi = ffi;
+    this.lib = lib;
+    this.handle = handle;
+    this.realtimeCallback = realtimeCallback;
+    this.resolvedNativeLibraryPath = nativeLibraryPath;
   }
 
   async stop(): Promise<void> {
-    if (!this.process) {
+    if (!this.handle || !this.lib) {
       return;
     }
-
-    const proc = this.process;
-    this.process = undefined;
-
-    if (proc.exitCode == null) {
-      proc.kill();
+    for (const connection of this.realtimeConnections.values()) {
+      connection.close();
     }
-
-    await proc.exited;
+    this.realtimeConnections.clear();
+    this.lib.symbols.EasyMatrixStop(this.handle);
+    this.lib.symbols.EasyMatrixDestroy(this.handle);
+    this.realtimeCallback?.close();
+    this.realtimeCallback = undefined;
+    this.lib.close();
+    this.lib = undefined;
+    this.ffi = undefined;
+    this.handle = undefined;
   }
 
-  private async waitForReady(): Promise<void> {
-    const startupTimeoutMs = this.options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
-    const pollIntervalMs = this.options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-    const startedAt = Date.now();
-    const url = `${this.baseURL}/v1/info`;
-
-    while (Date.now() - startedAt < startupTimeoutMs) {
-      if (!this.process || this.process.exitCode != null) {
-        const logs = await this.readProcessLogs();
-        throw new Error(`Embedded runtime exited before becoming ready. ${logs}`.trim());
-      }
-
-      try {
-        const response = await fetch(url, { method: "GET" });
-        if (response.ok) {
-          return;
-        }
-      } catch {
-        // process may still be starting
-      }
-
-      await delay(pollIntervalMs);
-    }
-
-    const logs = await this.readProcessLogs();
-    throw new Error(`Timed out waiting for embedded runtime readiness at ${url}. ${logs}`.trim());
+  async destroy(): Promise<void> {
+    await this.stop();
   }
 
-  private async readProcessLogs(): Promise<string> {
-    if (!this.process || this.options.inheritStdio) {
-      return "";
+  async request(request: NativeRequest): Promise<NativeResponse> {
+    await this.start();
+    const response = this.parseJSONPointer(
+      this.lib!.symbols.EasyMatrixHandleRequest(
+        this.handle!,
+        JSON.stringify({
+          method: request.method,
+          url: request.url,
+          headers: normalizeHeaders(request.headers),
+          body_base64: encodeBody(request.body ?? null),
+        }),
+      ),
+    ) as FFIResponsePayload;
+    if (response.error) {
+      throw new Error(response.error);
     }
-
-    const chunks: string[] = [];
-
-    if (this.process.stderr && typeof this.process.stderr !== "number") {
-      const stderrText = await new Response(this.process.stderr).text();
-      if (stderrText.trim()) {
-        chunks.push(`stderr: ${stderrText.trim()}`);
-      }
-    }
-
-    if (this.process.stdout && typeof this.process.stdout !== "number") {
-      const stdoutText = await new Response(this.process.stdout).text();
-      if (stdoutText.trim()) {
-        chunks.push(`stdout: ${stdoutText.trim()}`);
-      }
-    }
-
-    return chunks.join(" | ");
+    return {
+      status: response.status ?? 500,
+      statusText: response.statusText,
+      headers: response.headers,
+      body: decodeBody(response.body_base64),
+    };
   }
+
+  async connectRealtime(): Promise<EmbeddedRealtimeConnection> {
+    await this.start();
+    const rawConnectionID = this.lib!.symbols.EasyMatrixRealtimeConnect(this.handle!, this.realtimeCallback!);
+    const connectionID = rawConnectionID ? BigInt(rawConnectionID) : 0n;
+    if (!connectionID) {
+      throw new Error("Failed to open realtime connection.");
+    }
+    const connection = new RealtimeConnection(this, connectionID);
+    this.realtimeConnections.set(connectionID, connection);
+    return connection;
+  }
+
+  private parseJSONPointer(pointer: any): unknown {
+    if (!pointer) {
+      return {};
+    }
+    try {
+      const raw = String(new this.ffi!.CString(pointer));
+      return raw ? JSON.parse(raw) : {};
+    } finally {
+      this.lib!.symbols.EasyMatrixFreeCString(pointer);
+    }
+  }
+
+  sendRealtime(connectionID: bigint, payload: string): void {
+    const responsePtr = this.lib!.symbols.EasyMatrixRealtimeSend(this.handle!, connectionID, payload);
+    if (!responsePtr) {
+      return;
+    }
+    const response = this.parseJSONPointer(responsePtr) as { error?: string };
+    if (response.error) {
+      throw new Error(response.error);
+    }
+  }
+
+  closeRealtime(connectionID: bigint): void {
+    if (!this.handle || !this.lib) {
+      return;
+    }
+    this.realtimeConnections.delete(connectionID);
+    this.lib.symbols.EasyMatrixRealtimeClose(this.handle, connectionID);
+  }
+}
+
+export function createRuntime(options: EmbeddedRuntimeOptions = {}): EmbeddedRuntime {
+  return new EmbeddedRuntime(options);
 }
