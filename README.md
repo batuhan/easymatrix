@@ -1,102 +1,140 @@
 # EasyMatrix
 
-EasyMatrix is a Beeper Desktop API-compatible headless Matrix client built on `gomuks`. It can be used with the Desktop API JS SDK and also ships an embedded Bun adapter backed by a native shared library.
+EasyMatrix is a Beeper Desktop API-compatible server built on top of `gomuks`.
 
-## JS Adapter
+It has two modes:
 
-Adapter package: `@bi/easymatrix`
+- A standalone Go HTTP server that exposes the Desktop API route surface.
+- A Bun-only embedded runtime that loads a native shared library and lets JS code talk to the same server logic in-process.
 
-```bash
-npx @bi/easymatrix
-```
+The repo is still experimental. The public API is not treated as stable yet.
 
-```ts
-import { desktopAPIFetch, run } from "@bi/easymatrix";
-```
+## What It Covers
 
-## What it does
+- `v1` Desktop API routes for accounts, chats, messages, assets, contacts, search, focus, info, and websocket events
+- OAuth discovery and token endpoints used by Desktop API clients
+- A `/manage` UI for homeserver discovery, login, and recovery-key verification
+- Embedded fetch/runtime/realtime helpers for Bun
+- Type alignment with `@beeper/desktop-api` on the JS side and `desktop-api-go` on the Go side
 
-- Starts gomuks from a dedicated state directory
-- Exposes Beeper-compatible routes with Bearer token auth
-- Maps gomuks rooms/events into Beeper chat/message/account schemas
-- Implements the current `v1` route surface used by Beeper Desktop API clients (accounts, chats, messages, assets, search, contacts)
-- Supports asset upload/download/serve endpoints
-- Uses Matrix room/account data (`m.tag`, `com.beeper.mute`, `com.beeper.inbox.done`, `com.beeper.chats.reminder`) to enrich chat state
-- Supports `POST /v1/chats` in both `mode: "create"` and `mode: "start"` formats
-- Supports both contacts APIs: `GET /v1/accounts/{accountID}/contacts` and `GET /v1/accounts/{accountID}/contacts/list`
-- Exposes WebSocket events at `GET /v1/ws` (`ready`, `subscriptions.*`, `chat.*`, `message.*`, `error`)
-- Exposes OAuth2-compatible discovery/flow endpoints (`/.well-known/*`, `/oauth/*`) and `GET /v1/info`
+## Repo Layout
 
-## Run
+- [cmd/server/main.go](/Users/batuhan/Projects/labs/easymatrix/cmd/server/main.go): standalone HTTP server
+- [internal/server](/Users/batuhan/Projects/labs/easymatrix/internal/server): Desktop API route handlers and websocket implementation
+- [internal/gomuksruntime](/Users/batuhan/Projects/labs/easymatrix/internal/gomuksruntime): gomuks bootstrap and JSON-command helpers
+- [src/index.ts](/Users/batuhan/Projects/labs/easymatrix/src/index.ts): JS entrypoint
+- [src/client.ts](/Users/batuhan/Projects/labs/easymatrix/src/client.ts): embedded SDK/fetch helpers
+- [src/runtime.ts](/Users/batuhan/Projects/labs/easymatrix/src/runtime.ts): Bun native runtime bridge
+- [src/realtime.ts](/Users/batuhan/Projects/labs/easymatrix/src/realtime.ts): realtime adapter for embedded mode
+
+## Server Mode
+
+Run the local server:
 
 ```bash
 go run ./cmd/server
 ```
+
+Default listen address:
+
+```text
+127.0.0.1:23373
+```
+
+Once running:
+
+- `GET /v1/info` returns server, endpoint, and platform metadata.
+- `GET /manage` opens the local login/verification UI.
+- `GET /v1/spec` redirects to the public Desktop API docs.
 
 ## Environment
 
-- `.env` in the current working directory is loaded automatically (if present)
-- `BEEPER_ACCESS_TOKEN` (optional): static bearer token for legacy direct Bearer auth
-- `BEEPER_API_LISTEN` (optional): listen address (default `127.0.0.1:23373`)
-- `BEEPER_STATE_DIR` (optional): runtime state root (default `~/.local/share/easymatrix`)
-- `BEEPER_ALLOW_QUERY_TOKEN` (optional): set `true` to allow `dangerouslyUseTokenInQuery` for `/v1/assets/serve`
-- `BEEPER_HOMESERVER_URL` (optional): homeserver for password login bootstrap (default `https://matrix.beeper.com`)
-- `BEEPER_LOGIN_TOKEN` (optional): run JWT login automatically on startup
-- `BEEPER_USERNAME` + `BEEPER_PASSWORD` (optional, must be set together): run password login automatically on startup
-- `BEEPER_RECOVERY_KEY` (optional): run verification automatically on startup
+`.env` is loaded automatically from the current working directory if present.
 
-## Login (Beeper Session)
+- `BEEPER_API_LISTEN`: listen address for the HTTP server. Default: `127.0.0.1:23373`
+- `BEEPER_ACCESS_TOKEN`: static bearer token for direct API access
+- `BEEPER_STATE_DIR`: state directory used by gomuks. Default: `~/.local/share/easymatrix`
+- `BEEPER_ALLOW_QUERY_TOKEN`: set to `true` to allow query-token auth for asset serving
+- `BEEPER_HOMESERVER_URL`: homeserver URL used for bootstrap login. Default: `https://matrix.beeper.com`
+- `BEEPER_LOGIN_TOKEN`: Beeper JWT login token
+- `BEEPER_USERNAME`: username for password login
+- `BEEPER_PASSWORD`: password for password login
+- `BEEPER_RECOVERY_KEY`: recovery key / passphrase for verification
 
-`EasyMatrix` now includes a built-in setup UI at:
+Rules:
 
-- `http://127.0.0.1:23373/manage` (or your configured listen address)
+- `BEEPER_USERNAME` and `BEEPER_PASSWORD` must be set together.
+- `BEEPER_LOGIN_TOKEN` cannot be combined with `BEEPER_USERNAME` and `BEEPER_PASSWORD`.
 
-Flow:
+## Login and Verification
 
-1. Start the server:
-```bash
-go run ./cmd/server
+The easiest way to create a usable Beeper session is the built-in UI:
+
+```text
+http://127.0.0.1:23373/manage
 ```
-2. Open `/manage`.
-3. Log in:
-   - Recommended: use **Beeper Email Login** (request code -> submit code).
-   - Alternative: use **JWT / Login Token** with a Beeper login token.
-   - Alternative: use **Password Login** (homeserver URL, username, password).
-4. Enter your recovery key/passphrase in **Verification**.
-5. Confirm `is_logged_in=true` and `is_verified=true` in Client State.
 
-If no valid Beeper session exists, protected API calls return `403`.
+Supported flows:
 
-If you set `BEEPER_LOGIN_TOKEN` or `BEEPER_USERNAME`/`BEEPER_PASSWORD`, plus `BEEPER_RECOVERY_KEY`, startup will automatically login and verify without opening `/manage`.
+- homeserver discovery from Matrix user ID
+- password login
+- custom login payloads
+- Beeper email-code login helpers
+- recovery-key verification
 
-`/manage` only supports recovery-key/passphrase verification today. Emoji / SAS confirmation is not exposed by gomuks' JSON command API yet.
+If `BEEPER_LOGIN_TOKEN` or `BEEPER_USERNAME` / `BEEPER_PASSWORD` are set, plus `BEEPER_RECOVERY_KEY`, the runtime will attempt to bootstrap the session automatically on startup.
 
-## Embedded Bun Runtime
+Protected API routes require a logged-in Beeper homeserver session.
 
-The embedded runtime is Bun-only and follows the same long-lived native runtime pattern gomuks uses for its JS-facing environments: start one native client, dispatch JSON commands into it, and consume typed realtime events back out of it.
+## JS Package
 
-Current embedded options support the same startup auth inputs as server mode:
+Package name:
 
-- `beeperHomeserverURL`
-- `beeperLoginToken`
-- `beeperUsername` / `beeperPassword`
-- `beeperRecoveryKey`
+```bash
+@bi/easymatrix
+```
 
-Example:
+Main exports today:
+
+- `run`
+- `serveHTTP`
+- `createEmbeddedFetch`
+- `createRuntimeHandle`
+- `createEmbeddedRealtime`
+- `withEmbedded`
+- `createRuntime`
+- `EmbeddedRuntime`
+- `BeeperDesktop`
+
+The package also re-exports embedded bridge command/event types and native fetch helpers from [src/index.ts](/Users/batuhan/Projects/labs/easymatrix/src/index.ts).
+
+## Embedded Runtime
+
+The embedded runtime is Bun-only.
+
+Build the native library and JS package first:
+
+```bash
+npm run build
+```
+
+That produces JS output in `dist/` and packages the native shared library into `dist/native`.
+
+You can also point the runtime at a custom shared library path with:
+
+```bash
+EASYMATRIX_NATIVE_LIBRARY_PATH=/absolute/path/to/libeasymatrixffi.dylib
+```
+
+### Embedded SDK Example
 
 ```ts
-import {
-  BeeperDesktop,
-  EMBEDDED_RUNTIME_INFO,
-  createEmbeddedRealtime,
-  createRuntimeHandle,
-  withEmbedded,
-} from "@bi/easymatrix";
+import { BeeperDesktop, withEmbedded } from "@bi/easymatrix";
 
 const embedded = await withEmbedded(BeeperDesktop, {
   runtime: {
     accessToken: "local-dev-token",
-    stateDir: "/tmp/easymatrix-bun",
+    stateDir: "/tmp/easymatrix",
     beeperHomeserverURL: "https://matrix.beeper.com",
     beeperLoginToken: process.env.BEEPER_LOGIN_TOKEN,
     beeperRecoveryKey: process.env.BEEPER_RECOVERY_KEY,
@@ -104,32 +142,101 @@ const embedded = await withEmbedded(BeeperDesktop, {
 });
 
 const accounts = await embedded.sdk.accounts.list();
+console.log(accounts);
+
+await embedded.close();
+```
+
+### Embedded Runtime Handle Example
+
+```ts
+import {
+  EMBEDDED_RUNTIME_INFO,
+  createEmbeddedRealtime,
+  createRuntimeHandle,
+} from "@bi/easymatrix";
 
 const runtime = await createRuntimeHandle({
-  runtime: embedded.runtime,
+  runtime: {
+    accessToken: "local-dev-token",
+  },
 });
 
 const info = await runtime.invoke({ type: EMBEDDED_RUNTIME_INFO });
-const realtime = await createEmbeddedRealtime({ runtime: embedded.runtime });
+console.log(info);
 
+const realtime = await createEmbeddedRealtime({ runtime: runtime.runtime });
 realtime.setSubscriptions(["*"]);
-realtime.addEventListener("message.upserted", (event) => {
-  const detail = (event as CustomEvent).detail;
-  console.log(detail);
+
+realtime.addEventListener("chat.upserted", (event) => {
+  console.log((event as CustomEvent).detail);
 });
 ```
 
-The native library must still be built first:
+### Embedded Fetch Example
 
-```bash
-npm run build
+```ts
+import { BeeperDesktop, createEmbeddedFetch } from "@bi/easymatrix";
+
+const embedded = await createEmbeddedFetch({
+  runtime: {
+    accessToken: "local-dev-token",
+  },
+});
+
+const sdk = new BeeperDesktop({
+  accessToken: "local-dev-token",
+  baseURL: embedded.baseURL,
+  fetch: embedded.fetch,
+});
+
+const info = await sdk.info.get();
+console.log(info);
+
+await embedded.close();
 ```
 
-`npm run build` now copies the native shared library into `dist/native`, so installed package builds resolve their own artifact by default instead of assuming a repo-local `bin/` layout. You can still override it with `nativeLibraryPath` or `EASYMATRIX_NATIVE_LIBRARY_PATH`.
+## Realtime
 
-## CLI Login
+Server mode exposes websocket events at:
 
-You can drive the same `/manage` flows from the terminal:
+```text
+GET /v1/ws
+```
+
+Embedded mode exposes the same domain events through `createEmbeddedRealtime`.
+
+Typical event families:
+
+- `ready`
+- `subscriptions.updated`
+- `chat.upserted`
+- `chat.deleted`
+- `message.upserted`
+- `message.deleted`
+- `error`
+
+## CLI
+
+The package ships a small CLI wrapper:
+
+```bash
+npx @bi/easymatrix
+```
+
+If run inside the repo it defaults to:
+
+```bash
+go run ./cmd/server
+```
+
+Outside the repo it falls back to:
+
+```bash
+go run github.com/batuhan/easymatrix/cmd/server@latest
+```
+
+There is also a helper script for driving the `/manage` login flow from the terminal:
 
 ```bash
 node ./scripts/easymatrix-login.mjs \
@@ -139,17 +246,21 @@ node ./scripts/easymatrix-login.mjs \
   --recovery-key "$BEEPER_RECOVERY_KEY"
 ```
 
-## Auth Modes
+## Development
 
-You can authenticate in two ways:
+Useful commands:
 
-- Static token: set `BEEPER_ACCESS_TOKEN` and send it as Bearer token.
-- OAuth2 flow: use `/.well-known/oauth-protected-resource` and `/oauth/*` endpoints to get access tokens.
-
-`GET /v1/info` reports active endpoint URLs and auth discovery metadata.
+```bash
+npm run build
+npm run build:native
+npm run typecheck
+npm run test:types
+go test ./...
+```
 
 ## Notes
 
-- The server imports and runs `go.mau.fi/gomuks` as a library.
-- Local bridge account discovery is sourced from `com.beeper.local_bridge_state` account-data with session fallback.
-- Requests are accepted only for Beeper homeserver sessions (`matrix.beeper.com`, staging, dev).
+- EasyMatrix embeds `go.mau.fi/gomuks` as a library; it does not shell out to a separate gomuks process in normal server mode.
+- Account discovery for local bridges is inferred from `com.beeper.local_bridge_state`.
+- The implementation is intentionally Beeper-specific and only accepts Beeper homeserver sessions.
+- The JS package and route surface may still change while the project is being shaped.
