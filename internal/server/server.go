@@ -60,7 +60,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /v1/spec", s.public(s.openAPISpec))
-	mux.Handle("GET /v0/spec", s.public(s.openAPISpecRedirect))
 	mux.Handle("GET /v1/info", s.public(s.info))
 	mux.Handle("GET /manage", s.public(s.manageUI))
 	mux.Handle("GET /manage/", s.public(s.manageUI))
@@ -68,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /manage/discover-homeserver", s.public(s.manageDiscoverHomeserver))
 	mux.Handle("POST /manage/login-flows", s.public(s.manageLoginFlows))
 	mux.Handle("POST /manage/login-password", s.public(s.manageLoginPassword))
+	mux.Handle("POST /manage/login-token", s.public(s.manageLoginToken))
 	mux.Handle("POST /manage/login-custom", s.public(s.manageLoginCustom))
 	mux.Handle("POST /manage/verify", s.public(s.manageVerify))
 	mux.Handle("POST /manage/beeper/start-login", s.public(s.manageBeeperStartLogin))

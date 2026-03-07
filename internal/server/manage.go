@@ -166,6 +166,63 @@ func (s *Server) manageLoginPassword(w http.ResponseWriter, r *http.Request) err
 	return writeJSON(w, state)
 }
 
+func (s *Server) manageLoginToken(w http.ResponseWriter, r *http.Request) error {
+	var req struct {
+		HomeserverURL string `json:"homeserverURL"`
+		LoginToken    string `json:"loginToken"`
+		DeviceID      string `json:"deviceID,omitempty"`
+		DeviceName    string `json:"deviceName,omitempty"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		return err
+	}
+	req.HomeserverURL = strings.TrimSpace(req.HomeserverURL)
+	req.LoginToken = strings.TrimSpace(req.LoginToken)
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.DeviceName = strings.TrimSpace(req.DeviceName)
+	if req.HomeserverURL == "" {
+		req.HomeserverURL = s.cfg.BeeperHomeserverURL
+	}
+	if req.HomeserverURL == "" {
+		return errs.Validation(map[string]any{"homeserverURL": "homeserverURL is required"})
+	}
+	if req.LoginToken == "" {
+		return errs.Validation(map[string]any{"loginToken": "loginToken is required"})
+	}
+	cli, err := s.requireManageClient()
+	if err != nil {
+		return err
+	}
+	loginReq := &mautrix.ReqLogin{
+		Type:                     mautrix.AuthType("org.matrix.login.jwt"),
+		Token:                    req.LoginToken,
+		InitialDeviceDisplayName: req.DeviceName,
+	}
+	if req.DeviceID != "" {
+		loginReq.DeviceID = id.DeviceID(req.DeviceID)
+	}
+	err = runHiCommand(
+		r.Context(),
+		cli,
+		jsoncmd.ReqLoginCustom,
+		&jsoncmd.LoginCustomParams{
+			HomeserverURL: req.HomeserverURL,
+			Request:       loginReq,
+		},
+		nil,
+	)
+	if err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
+			return err
+		}
+	}
+	state, err := s.getManageState()
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, state)
+}
+
 func (s *Server) manageLoginCustom(w http.ResponseWriter, r *http.Request) error {
 	var req struct {
 		HomeserverURL string           `json:"homeserverURL"`
@@ -605,6 +662,32 @@ const manageHTML = `<!doctype html>
     </div>
 
     <div class="card">
+      <h2>JWT / Login Token</h2>
+      <div class="muted" style="margin-bottom: 8px;">Useful for staging accounts created via an external bootstrap script.</div>
+      <div class="row">
+        <div>
+          <label for="jwt-hs">Homeserver URL</label>
+          <input id="jwt-hs" placeholder="https://matrix.beeper-staging.com" value="https://matrix.beeper.com">
+        </div>
+        <div>
+          <label for="jwt-token">Login token</label>
+          <input id="jwt-token" placeholder="eyJ...">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="jwt-device-id">Device ID (optional)</label>
+          <input id="jwt-device-id" placeholder="EASYMATRIX1">
+        </div>
+        <div>
+          <label for="jwt-device-name">Device name (optional)</label>
+          <input id="jwt-device-name" placeholder="EasyMatrix staging">
+        </div>
+      </div>
+      <button id="jwt-login">Login With Token</button>
+    </div>
+
+    <div class="card">
       <h2>Verification</h2>
       <div class="row">
         <div>
@@ -616,6 +699,7 @@ const manageHTML = `<!doctype html>
           <button id="verify-submit">Verify</button>
         </div>
       </div>
+      <div class="muted">Emoji / SAS confirmation is not exposed yet through gomuks JSON commands, so verification here is recovery-key based.</div>
     </div>
 
     <div class="card">
@@ -776,6 +860,22 @@ const manageHTML = `<!doctype html>
       });
     });
 
+    document.getElementById("jwt-login").addEventListener("click", function () {
+      run(async function () {
+        const homeserverURL = document.getElementById("jwt-hs").value.trim();
+        const loginToken = document.getElementById("jwt-token").value.trim();
+        const deviceID = document.getElementById("jwt-device-id").value.trim();
+        const deviceName = document.getElementById("jwt-device-name").value.trim();
+        await api("/manage/login-token", {
+          homeserverURL: homeserverURL,
+          loginToken: loginToken,
+          deviceID: deviceID || undefined,
+          deviceName: deviceName || undefined
+        });
+        await refreshState();
+      });
+    });
+
     document.getElementById("verify-submit").addEventListener("click", function () {
       run(async function () {
         const recoveryKey = document.getElementById("verify-key").value.trim();
@@ -792,6 +892,7 @@ const manageHTML = `<!doctype html>
         const hs = result && result["m.homeserver"] && result["m.homeserver"].base_url;
         if (hs) {
           document.getElementById("pw-hs").value = hs;
+          document.getElementById("jwt-hs").value = hs;
           document.getElementById("flows-hs").value = hs;
         }
       });

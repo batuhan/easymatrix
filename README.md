@@ -20,12 +20,11 @@ import { desktopAPIFetch, run } from "@bi/easymatrix";
 - Exposes Beeper-compatible routes with Bearer token auth
 - Maps gomuks rooms/events into Beeper chat/message/account schemas
 - Implements the current `v1` route surface used by Beeper Desktop API clients (accounts, chats, messages, assets, search, contacts)
-- Exposes practical `v0` aliases used by older Beeper Connect clients
 - Supports asset upload/download/serve endpoints
 - Uses Matrix room/account data (`m.tag`, `com.beeper.mute`, `com.beeper.inbox.done`, `com.beeper.chats.reminder`) to enrich chat state
 - Supports `POST /v1/chats` in both `mode: "create"` and `mode: "start"` formats
 - Supports both contacts APIs: `GET /v1/accounts/{accountID}/contacts` and `GET /v1/accounts/{accountID}/contacts/list`
-- Exposes WebSocket events at `GET /v1/ws` and `GET /ws` (`ready`, `subscriptions.*`, `chat.*`, `message.*`, `error`)
+- Exposes WebSocket events at `GET /v1/ws` (`ready`, `subscriptions.*`, `chat.*`, `message.*`, `error`)
 - Exposes OAuth2-compatible discovery/flow endpoints (`/.well-known/*`, `/oauth/*`) and `GET /v1/info`
 
 ## Run
@@ -42,6 +41,7 @@ go run ./cmd/server
 - `BEEPER_STATE_DIR` (optional): runtime state root (default `~/.local/share/easymatrix`)
 - `BEEPER_ALLOW_QUERY_TOKEN` (optional): set `true` to allow `dangerouslyUseTokenInQuery` for `/v1/assets/serve`
 - `BEEPER_HOMESERVER_URL` (optional): homeserver for password login bootstrap (default `https://matrix.beeper.com`)
+- `BEEPER_LOGIN_TOKEN` (optional): run JWT login automatically on startup
 - `BEEPER_USERNAME` + `BEEPER_PASSWORD` (optional, must be set together): run password login automatically on startup
 - `BEEPER_RECOVERY_KEY` (optional): run verification automatically on startup
 
@@ -60,13 +60,56 @@ go run ./cmd/server
 2. Open `/manage`.
 3. Log in:
    - Recommended: use **Beeper Email Login** (request code -> submit code).
+   - Staging-friendly: use **JWT / Login Token** with a token from your account bootstrap script.
    - Alternative: use **Password Login** (homeserver URL, username, password).
 4. Enter your recovery key/passphrase in **Verification**.
 5. Confirm `is_logged_in=true` and `is_verified=true` in Client State.
 
 If no valid Beeper session exists, protected API calls return `403`.
 
-If you set `BEEPER_USERNAME`, `BEEPER_PASSWORD`, and `BEEPER_RECOVERY_KEY`, startup will automatically login and verify without opening `/manage`.
+If you set `BEEPER_LOGIN_TOKEN` or `BEEPER_USERNAME`/`BEEPER_PASSWORD`, plus `BEEPER_RECOVERY_KEY`, startup will automatically login and verify without opening `/manage`.
+
+`/manage` only supports recovery-key/passphrase verification today. Emoji / SAS confirmation is not exposed by gomuks' JSON command API yet.
+
+## CLI Login
+
+You can drive the same `/manage` flows from the terminal:
+
+```bash
+node ./scripts/easymatrix-login.mjs \
+  --base-url http://127.0.0.1:23373 \
+  --homeserver-url https://matrix.beeper-staging.com \
+  --login-token "$BEEPER_LOGIN_TOKEN" \
+  --recovery-key "$BEEPER_RECOVERY_KEY"
+```
+
+For email-code login:
+
+```bash
+node ./scripts/easymatrix-login.mjs \
+  --base-url http://127.0.0.1:23373 \
+  --domain beeper-staging.com \
+  --email qatest+123456@beeper.com \
+  --code 959729 \
+  --recovery-key "$BEEPER_RECOVERY_KEY"
+```
+
+## Staging E2E
+
+`EasyMatrix` now includes a staging harness that:
+
+- creates or reuses two Beeper staging accounts
+- starts two easymatrix instances on ports `23373` and `23374`
+- verifies both accounts with recovery keys
+- exercises most of the Desktop API-compatible surface (accounts, chats, messages, search, reminders, archive, assets, websocket events)
+
+Run it with:
+
+```bash
+npm run e2e:staging
+```
+
+If the account bootstrap script is not in the default workspace location, set `BEEPER_ACCOUNT_CREATOR=/abs/path/to/create-beeper-account.js`.
 
 ## Auth Modes
 

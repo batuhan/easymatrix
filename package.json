@@ -24,6 +24,8 @@
     "clean": "rm -rf dist",
     "build:native": "./build-noweb.sh",
     "build": "./build-noweb.sh && bunx tsc -p tsconfig.build.json",
+    "login:manage": "node ./scripts/easymatrix-login.mjs",
+    "e2e:staging": "node ./scripts/e2e-staging.mjs",
     "typecheck": "bunx tsc -p tsconfig.json --noEmit",
     "test:types": "bunx tsc -p tsconfig.types.json --noEmit"
   },

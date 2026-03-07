@@ -5,13 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"go.mau.fi/gomuks/pkg/gomuks"
 	"go.mau.fi/gomuks/pkg/hicli"
 	"go.mau.fi/gomuks/pkg/hicli/jsoncmd"
+	"go.mau.fi/util/dbutil"
+	"golang.org/x/net/http2"
+	"maunium.net/go/mautrix"
 
 	"github.com/batuhan/easymatrix/internal/config"
 )
@@ -28,6 +34,50 @@ func New(cfg config.Config) (*Runtime, error) {
 	}
 	cfg.StateDir = stateDir
 	return &Runtime{cfg: cfg}, nil
+}
+
+func startClientWithoutExit(gmx *gomuks.Gomuks) error {
+	hicli.HTMLSanitizerImgSrcTemplate = "_gomuks/media/%s/%s?encrypted=false"
+	rawDB, err := dbutil.NewFromConfig("gomuks", dbutil.Config{
+		PoolConfig: gmx.GetDBConfig(),
+	}, dbutil.ZeroLogger(gmx.Log.With().Str("component", "hicli").Str("db_section", "main").Logger()))
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+
+	clientCtx := gmx.Log.WithContext(context.Background())
+	gmx.Client = hicli.New(
+		rawDB,
+		nil,
+		gmx.Log.With().Str("component", "hicli").Logger(),
+		[]byte("meow"),
+		gmx.HandleEvent,
+	)
+	gmx.Client.LogoutFunc = gmx.Logout
+
+	httpClient := gmx.Client.Client.Client
+	if runtime.GOOS == "js" {
+		gmx.Client.Client.UserAgent = ""
+		httpClient.Transport = nil
+	} else if transport, ok := httpClient.Transport.(*http.Transport); ok {
+		transport.ForceAttemptHTTP2 = false
+		if !gmx.Config.Matrix.DisableHTTP2 {
+			h2, err := http2.ConfigureTransports(transport)
+			if err != nil {
+				return fmt.Errorf("failed to configure HTTP/2: %w", err)
+			}
+			h2.ReadIdleTimeout = 30 * time.Second
+		}
+	}
+
+	userID, err := gmx.Client.DB.Account.GetFirstUserID(clientCtx)
+	if err != nil {
+		return fmt.Errorf("failed to get first user ID: %w", err)
+	}
+	if err := gmx.Client.Start(clientCtx, userID, nil); err != nil {
+		return fmt.Errorf("failed to start client: %w", err)
+	}
+	return nil
 }
 
 func (r *Runtime) Start(ctx context.Context) error {
@@ -52,8 +102,8 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to load gomuks config: %w", err)
 	}
 	gmx.SetupLog()
-	if code := gmx.StartClientWithoutExit(ctx); code != 0 {
-		return fmt.Errorf("failed to start gomuks client (exit code %d)", code)
+	if err := startClientWithoutExit(gmx); err != nil {
+		return err
 	}
 	if err := r.bootstrapSessionFromEnv(ctx, gmx); err != nil {
 		return err
@@ -103,9 +153,10 @@ func (r *Runtime) SubscribeEvents(handler func(any)) (func(), error) {
 }
 
 func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuks) error {
+	hasLoginToken := strings.TrimSpace(r.cfg.BeeperLoginToken) != ""
 	hasPasswordLogin := strings.TrimSpace(r.cfg.BeeperUsername) != "" && strings.TrimSpace(r.cfg.BeeperPassword) != ""
 	hasRecoveryKey := strings.TrimSpace(r.cfg.BeeperRecoveryKey) != ""
-	if !hasPasswordLogin && !hasRecoveryKey {
+	if !hasLoginToken && !hasPasswordLogin && !hasRecoveryKey {
 		return nil
 	}
 
@@ -115,6 +166,27 @@ func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuk
 	}
 
 	state := cli.State()
+	if hasLoginToken && !state.IsLoggedIn {
+		err := runHiCommand(
+			ctx,
+			cli,
+			jsoncmd.ReqLoginCustom,
+			&jsoncmd.LoginCustomParams{
+				HomeserverURL: r.cfg.BeeperHomeserverURL,
+				Request: &mautrix.ReqLogin{
+					Type:  mautrix.AuthType("org.matrix.login.jwt"),
+					Token: r.cfg.BeeperLoginToken,
+				},
+			},
+			nil,
+		)
+		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
+			return fmt.Errorf("failed to login using env login token: %w", err)
+		}
+		gmx.Log.Info().Str("homeserver_url", r.cfg.BeeperHomeserverURL).Msg("beeper jwt login completed from environment")
+	}
+
+	state = cli.State()
 	if hasPasswordLogin && !state.IsLoggedIn {
 		err := runHiCommand(
 			ctx,

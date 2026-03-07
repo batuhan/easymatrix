@@ -49,5 +49,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	mvdan.cc/xurls/v2 v2.6.0 // indirect
 )
-
-replace go.mau.fi/gomuks => ../gomuks-api

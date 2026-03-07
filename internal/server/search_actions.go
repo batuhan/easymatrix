@@ -1254,9 +1254,164 @@ func (s *Server) searchChatsCore(ctx context.Context, params searchChatsParams) 
 }
 
 func (s *Server) searchMessagesCore(ctx context.Context, params searchMessagesParams) (compat.SearchMessagesOutput, error) {
-	_ = ctx
-	_ = params
-	return emptySearchMessagesOutput(), nil
+	lookup, err := s.buildAccountLookup(ctx)
+	if err != nil {
+		return compat.SearchMessagesOutput{}, err
+	}
+	rooms, err := s.loadRoomsSorted(ctx)
+	if err != nil {
+		return compat.SearchMessagesOutput{}, err
+	}
+	roomStates, err := s.loadRoomAccountDataStates(ctx)
+	if err != nil {
+		return compat.SearchMessagesOutput{}, err
+	}
+	events, sourceHasMore, err := s.loadSearchMessageEvents(ctx, params)
+	if err != nil {
+		return compat.SearchMessagesOutput{}, err
+	}
+	if len(events) == 0 {
+		return emptySearchMessagesOutput(), nil
+	}
+	if err = s.populateLastEditRefs(ctx, events); err != nil {
+		return compat.SearchMessagesOutput{}, err
+	}
+
+	roomByID := make(map[id.RoomID]*database.Room, len(rooms))
+	for _, room := range rooms {
+		if room != nil {
+			roomByID[room.ID] = room
+		}
+	}
+
+	type roomSearchContext struct {
+		chat      compat.Chat
+		hasChat   bool
+		reactions map[id.EventID][]compat.Reaction
+		names     map[string]string
+	}
+	roomContext := make(map[id.RoomID]*roomSearchContext)
+	roomEvents := make(map[id.RoomID][]*database.Event)
+	for _, evt := range events {
+		if evt == nil {
+			continue
+		}
+		roomEvents[evt.RoomID] = append(roomEvents[evt.RoomID], evt)
+	}
+	for roomID, groupedEvents := range roomEvents {
+		reactions, reactionErr := s.loadReactionMap(ctx, roomID, groupedEvents)
+		if reactionErr != nil {
+			return compat.SearchMessagesOutput{}, reactionErr
+		}
+		roomContext[roomID] = &roomSearchContext{
+			reactions: reactions,
+			names:     s.loadMemberNameMap(ctx, roomID),
+		}
+	}
+
+	items := make([]compat.Message, 0, params.Limit+1)
+	resultRows := make([]int64, 0, params.Limit+1)
+	chats := make(map[string]compat.Chat)
+	for _, evt := range events {
+		if evt == nil {
+			continue
+		}
+		room := roomByID[evt.RoomID]
+		if room == nil {
+			continue
+		}
+		if len(params.ChatIDs) > 0 && !equalsAny(string(room.ID), params.ChatIDs) {
+			continue
+		}
+		state := roomStates[room.ID]
+		if !params.IncludeMuted && state.IsMuted {
+			continue
+		}
+		if params.ExcludeLowPriority && state.IsLowPriority {
+			continue
+		}
+
+		ctxForRoom := roomContext[room.ID]
+		if ctxForRoom == nil {
+			ctxForRoom = &roomSearchContext{
+				reactions: map[id.EventID][]compat.Reaction{},
+				names:     map[string]string{},
+			}
+			roomContext[room.ID] = ctxForRoom
+		}
+		if !ctxForRoom.hasChat {
+			chat, mapErr := s.mapRoomToChat(ctx, room, lookup, chatPreviewParticipants, false, state)
+			if mapErr != nil {
+				continue
+			}
+			ctxForRoom.chat = chat
+			ctxForRoom.hasChat = true
+		}
+		if len(params.AccountIDs) > 0 && !equalsAny(ctxForRoom.chat.AccountID, params.AccountIDs) {
+			continue
+		}
+		if params.ChatType != "" && params.ChatType != "any" && string(ctxForRoom.chat.Type) != params.ChatType {
+			continue
+		}
+
+		message, mapErr := s.mapEventToMessage(ctx, evt, room, lookup, reactionBundle{
+			Names:     ctxForRoom.names,
+			Reactions: ctxForRoom.reactions,
+		})
+		if mapErr != nil {
+			continue
+		}
+		if params.DateAfter != nil && !message.Timestamp.After(*params.DateAfter) {
+			continue
+		}
+		if params.DateBefore != nil && !message.Timestamp.Before(*params.DateBefore) {
+			continue
+		}
+		if !matchesSender(message, params.Sender) {
+			continue
+		}
+		if !matchesMedia(message, params.MediaTypes) {
+			continue
+		}
+		if !matchesMessageQuery(params.Query, message) {
+			continue
+		}
+
+		items = append(items, message)
+		resultRows = append(resultRows, int64(evt.TimelineRowID))
+		chats[message.ChatID] = ctxForRoom.chat
+		if len(items) > params.Limit {
+			break
+		}
+	}
+
+	hasMore := len(items) > params.Limit
+	if !hasMore && sourceHasMore && len(items) > 0 {
+		hasMore = true
+	}
+	if hasMore && len(items) > params.Limit {
+		items = items[:params.Limit]
+		resultRows = resultRows[:params.Limit]
+	}
+
+	var newestCursor *string
+	var oldestCursor *string
+	if len(resultRows) > 0 {
+		newestEncoded, newErr := cursor.Encode(cursor.MessageCursor{TimelineRowID: resultRows[0]})
+		oldestEncoded, oldErr := cursor.Encode(cursor.MessageCursor{TimelineRowID: resultRows[len(resultRows)-1]})
+		if firstErr(newErr, oldErr) == nil {
+			newestCursor = &newestEncoded
+			oldestCursor = &oldestEncoded
+		}
+	}
+
+	return compat.SearchMessagesOutput{
+		Items:        items,
+		Chats:        chats,
+		HasMore:      hasMore,
+		OldestCursor: oldestCursor,
+		NewestCursor: newestCursor,
+	}, nil
 }
 
 func emptySearchMessagesOutput() compat.SearchMessagesOutput {

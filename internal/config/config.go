@@ -16,6 +16,7 @@ type Config struct {
 	StateDir            string
 	AllowQueryTokenAuth bool
 	BeeperHomeserverURL string
+	BeeperLoginToken    string
 	BeeperUsername      string
 	BeeperPassword      string
 	BeeperRecoveryKey   string
@@ -36,12 +37,16 @@ func Load() (Config, error) {
 		AccessToken:         os.Getenv("BEEPER_ACCESS_TOKEN"),
 		AllowQueryTokenAuth: os.Getenv("BEEPER_ALLOW_QUERY_TOKEN") == "true",
 		BeeperHomeserverURL: getenvDefault("BEEPER_HOMESERVER_URL", defaultBeeperHomeserverURL),
+		BeeperLoginToken:    os.Getenv("BEEPER_LOGIN_TOKEN"),
 		BeeperUsername:      os.Getenv("BEEPER_USERNAME"),
 		BeeperPassword:      os.Getenv("BEEPER_PASSWORD"),
 		BeeperRecoveryKey:   os.Getenv("BEEPER_RECOVERY_KEY"),
 	}
 	if (cfg.BeeperUsername == "") != (cfg.BeeperPassword == "") {
 		return Config{}, fmt.Errorf("BEEPER_USERNAME and BEEPER_PASSWORD must be provided together")
+	}
+	if cfg.BeeperLoginToken != "" && cfg.BeeperUsername != "" {
+		return Config{}, fmt.Errorf("BEEPER_LOGIN_TOKEN cannot be combined with BEEPER_USERNAME/BEEPER_PASSWORD")
 	}
 	stateDir := os.Getenv("BEEPER_STATE_DIR")
 	if stateDir == "" {

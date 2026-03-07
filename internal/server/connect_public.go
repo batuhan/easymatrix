@@ -57,11 +57,6 @@ func (s *Server) openAPISpec(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (s *Server) openAPISpecRedirect(w http.ResponseWriter, r *http.Request) error {
-	http.Redirect(w, r, "/v1/spec", http.StatusMovedPermanently)
-	return nil
-}
-
 func (s *Server) info(w http.ResponseWriter, r *http.Request) error {
 	baseURL := s.requestBaseURL(r)
 	serverStatus := "ready"
@@ -118,7 +113,7 @@ func (s *Server) oauthProtectedResourceMetadata(w http.ResponseWriter, r *http.R
 		normalized = "/"
 	}
 	switch normalized {
-	case "/", "/v0", "/v1":
+	case "/", "/v1":
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		return writeJSON(w, map[string]string{"error": "Not Found"})
