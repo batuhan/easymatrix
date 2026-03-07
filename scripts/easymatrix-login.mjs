@@ -132,7 +132,7 @@ function printHelp() {
   process.stdout.write("Usage:\n");
   process.stdout.write("  node scripts/easymatrix-login.mjs --login-token TOKEN --recovery-key KEY\n");
   process.stdout.write("  node scripts/easymatrix-login.mjs --username USER --password PASS --recovery-key KEY\n");
-  process.stdout.write("  node scripts/easymatrix-login.mjs --domain beeper-staging.com --email you@example.com --code 959729 --recovery-key KEY\n\n");
+  process.stdout.write("  node scripts/easymatrix-login.mjs --domain beeper.com --email you@example.com --code 123456 --recovery-key KEY\n\n");
   process.stdout.write("Flags:\n");
   process.stdout.write(`  --base-url         EasyMatrix base URL (default ${DEFAULT_BASE_URL})\n`);
   process.stdout.write("  --homeserver-url   Matrix homeserver URL (defaults from --domain)\n");

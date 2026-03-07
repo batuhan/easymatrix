@@ -663,11 +663,10 @@ const manageHTML = `<!doctype html>
 
     <div class="card">
       <h2>JWT / Login Token</h2>
-      <div class="muted" style="margin-bottom: 8px;">Useful for staging accounts created via an external bootstrap script.</div>
       <div class="row">
         <div>
           <label for="jwt-hs">Homeserver URL</label>
-          <input id="jwt-hs" placeholder="https://matrix.beeper-staging.com" value="https://matrix.beeper.com">
+          <input id="jwt-hs" placeholder="https://matrix.beeper.com" value="https://matrix.beeper.com">
         </div>
         <div>
           <label for="jwt-token">Login token</label>
@@ -681,7 +680,7 @@ const manageHTML = `<!doctype html>
         </div>
         <div>
           <label for="jwt-device-name">Device name (optional)</label>
-          <input id="jwt-device-name" placeholder="EasyMatrix staging">
+          <input id="jwt-device-name" placeholder="EasyMatrix">
         </div>
       </div>
       <button id="jwt-login">Login With Token</button>

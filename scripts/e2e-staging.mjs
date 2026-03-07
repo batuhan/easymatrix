@@ -66,7 +66,7 @@ function printHelp() {
   process.stdout.write("Run a staging end-to-end suite against two local EasyMatrix instances.\n\n");
   process.stdout.write("Usage:\n");
   process.stdout.write("  node scripts/e2e-staging.mjs\n");
-  process.stdout.write("  node scripts/e2e-staging.mjs --creator-script /abs/path/to/create-beeper-account.js\n\n");
+  process.stdout.write("  node scripts/e2e-staging.mjs --creator-script /abs/path/to/bootstrap.js\n\n");
   process.stdout.write("Environment fallback:\n");
   process.stdout.write("  E2E_BASE_URL, E2E_BOT_LOGIN_TOKEN, E2E_BOT_RECOVERY_KEY, E2E_BOT_ACCESS_TOKEN, E2E_BOT_USER_ID,\n");
   process.stdout.write("  E2E_SENDER_LOGIN_TOKEN, E2E_SENDER_RECOVERY_KEY, E2E_SENDER_ACCESS_TOKEN, E2E_SENDER_USER_ID\n");
@@ -82,10 +82,7 @@ async function ensurePathExists(filePath) {
 }
 
 async function resolveCreatorScript(explicitPath) {
-  const candidates = [
-    explicitPath,
-    path.resolve(REPO_ROOT, "..", "..", "texts", "batuhan-scripts", "create-beeper-account.js"),
-  ].filter(Boolean);
+  const candidates = [explicitPath].filter(Boolean);
 
   for (const candidate of candidates) {
     if (await ensurePathExists(candidate)) {
@@ -150,10 +147,10 @@ async function loadAccounts(options) {
 
   const creatorScript = await resolveCreatorScript(options.creatorScript);
   if (!creatorScript) {
-    throw new Error("Could not find create-beeper-account.js. Set BEEPER_ACCOUNT_CREATOR or pass --creator-script.");
+    throw new Error("No bootstrap script configured. Set BEEPER_ACCOUNT_CREATOR or pass --creator-script.");
   }
 
-  process.stdout.write(`Using account bootstrap script at ${creatorScript}\n`);
+  process.stdout.write("Using configured account bootstrap script\n");
   const [bot, sender] = await Promise.all([createAccount(creatorScript), createAccount(creatorScript)]);
   return { bot, sender };
 }

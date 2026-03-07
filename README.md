@@ -60,7 +60,7 @@ go run ./cmd/server
 2. Open `/manage`.
 3. Log in:
    - Recommended: use **Beeper Email Login** (request code -> submit code).
-   - Staging-friendly: use **JWT / Login Token** with a token from your account bootstrap script.
+   - Alternative: use **JWT / Login Token** with a Beeper login token.
    - Alternative: use **Password Login** (homeserver URL, username, password).
 4. Enter your recovery key/passphrase in **Verification**.
 5. Confirm `is_logged_in=true` and `is_verified=true` in Client State.
@@ -91,7 +91,7 @@ const embedded = await withEmbedded(BeeperDesktop, {
   runtime: {
     accessToken: "local-dev-token",
     stateDir: "/tmp/easymatrix-bun",
-    beeperHomeserverURL: "https://matrix.beeper-staging.com",
+    beeperHomeserverURL: "https://matrix.beeper.com",
     beeperLoginToken: process.env.BEEPER_LOGIN_TOKEN,
     beeperRecoveryKey: process.env.BEEPER_RECOVERY_KEY,
   },
@@ -113,38 +113,10 @@ You can drive the same `/manage` flows from the terminal:
 ```bash
 node ./scripts/easymatrix-login.mjs \
   --base-url http://127.0.0.1:23373 \
-  --homeserver-url https://matrix.beeper-staging.com \
+  --homeserver-url https://matrix.beeper.com \
   --login-token "$BEEPER_LOGIN_TOKEN" \
   --recovery-key "$BEEPER_RECOVERY_KEY"
 ```
-
-For email-code login:
-
-```bash
-node ./scripts/easymatrix-login.mjs \
-  --base-url http://127.0.0.1:23373 \
-  --domain beeper-staging.com \
-  --email qatest+123456@beeper.com \
-  --code 959729 \
-  --recovery-key "$BEEPER_RECOVERY_KEY"
-```
-
-## Staging E2E
-
-`EasyMatrix` now includes a staging harness that:
-
-- creates or reuses two Beeper staging accounts
-- starts two easymatrix instances on ports `23373` and `23374`
-- verifies both accounts with recovery keys
-- exercises most of the Desktop API-compatible surface (accounts, chats, messages, search, reminders, archive, assets, websocket events)
-
-Run it with:
-
-```bash
-npm run e2e:staging
-```
-
-If the account bootstrap script is not in the default workspace location, set `BEEPER_ACCOUNT_CREATOR=/abs/path/to/create-beeper-account.js`.
 
 ## Auth Modes
 
