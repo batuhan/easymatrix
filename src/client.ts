@@ -1,9 +1,12 @@
 import { BeeperDesktop, type ClientOptions } from "@beeper/desktop-api";
 
-import { createFetchFromNativeRequest, type FetchLike } from "./native-fetch.js";
-import { createRuntime, EmbeddedRuntime, type EmbeddedRuntimeOptions, type EmbeddedRealtimeConnection } from "./runtime.js";
+import type { EmbeddedCommand, EmbeddedCommandResult } from "./bridge.js";
+import { createFetchFromNativeCommand, type FetchLike } from "./native-fetch.js";
+import { createEmbeddedRealtime, type CreateEmbeddedRealtimeOptions, type EmbeddedRealtimeAdapter } from "./realtime.js";
+import { EmbeddedRuntime, type EmbeddedRealtimeConnection } from "./runtime.js";
+import { normalizeRuntime, type RuntimeInput } from "./runtime-input.js";
 
-export type RuntimeInput = EmbeddedRuntime | EmbeddedRuntimeOptions | false;
+export type { RuntimeInput } from "./runtime-input.js";
 
 export interface CreateEmbeddedFetchOptions {
   runtime?: RuntimeInput;
@@ -19,7 +22,9 @@ export interface EmbeddedFetchHandle {
 }
 
 export interface EmbeddedRuntimeHandle extends EmbeddedFetchHandle {
+  invoke(command: EmbeddedCommand): Promise<EmbeddedCommandResult>;
   connectRealtime(): Promise<EmbeddedRealtimeConnection>;
+  createRealtime(options?: Omit<CreateEmbeddedRealtimeOptions, "runtime">): Promise<EmbeddedRealtimeAdapter>;
   destroy(): Promise<void>;
 }
 
@@ -41,19 +46,6 @@ function resolveFetch(fetchOverride?: FetchLike): FetchLike {
     throw new Error("No fetch implementation available. Provide options.fetch.");
   }
   return globalThis.fetch.bind(globalThis);
-}
-
-function normalizeRuntime(runtime: RuntimeInput | undefined): { runtime?: EmbeddedRuntime; owned: boolean } {
-  if (runtime === false) {
-    return { runtime: undefined, owned: false };
-  }
-  if (runtime instanceof EmbeddedRuntime) {
-    return { runtime, owned: false };
-  }
-  return {
-    runtime: createRuntime(runtime ?? {}),
-    owned: true,
-  };
 }
 
 function normalizeWithEmbeddedOptions(
@@ -81,7 +73,7 @@ export async function createEmbeddedFetch(
   }
 
   const resolvedFetch = runtime
-    ? createFetchFromNativeRequest((request) => runtime.request(request))
+    ? createFetchFromNativeCommand((command) => runtime.invoke(command))
     : resolveFetch(options.fetch);
 
   return {
@@ -102,11 +94,26 @@ export async function createRuntimeHandle(
   const embedded = await createEmbeddedFetch(options);
   return {
     ...embedded,
+    async invoke(command) {
+      if (!embedded.runtime) {
+        throw new Error("No embedded runtime is available.");
+      }
+      return embedded.runtime.invoke(command);
+    },
     async connectRealtime() {
       if (!embedded.runtime) {
         throw new Error("No embedded runtime is available.");
       }
       return embedded.runtime.connectRealtime();
+    },
+    async createRealtime(options = {}) {
+      if (!embedded.runtime) {
+        throw new Error("No embedded runtime is available.");
+      }
+      return createEmbeddedRealtime({
+        ...options,
+        runtime: embedded.runtime,
+      });
     },
     async destroy() {
       await embedded.close();

@@ -1,12 +1,14 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/batuhan/easymatrix/internal/config"
 	"github.com/batuhan/easymatrix/internal/gomuksruntime"
+	beeperdesktopapi "github.com/beeper/desktop-api-go"
 )
 
 func TestHandlerUsesV1RoutesOnly(t *testing.T) {
@@ -64,5 +66,34 @@ func TestOAuthProtectedResourceRejectsLegacyV0(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code == http.StatusNotFound {
 		t.Fatalf("/.well-known/oauth-protected-resource/v1 should remain registered")
+	}
+}
+
+func TestInfoIncludesTypedMCPField(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:          "127.0.0.1:23373",
+		StateDir:            t.TempDir(),
+		AccessToken:         "test-token",
+		BeeperHomeserverURL: "https://matrix.beeper.com",
+	}
+	rt, err := gomuksruntime.New(cfg)
+	if err != nil {
+		t.Fatalf("failed to create runtime: %v", err)
+	}
+	handler := New(cfg, rt).Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:23373/v1/info", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/v1/info returned %d, expected 200", rec.Code)
+	}
+
+	var payload beeperdesktopapi.InfoGetResponse
+	if err = json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode /v1/info response: %v", err)
+	}
+	if payload.Endpoints.Mcp == "" {
+		t.Fatal("expected /v1/info to include endpoints.mcp")
 	}
 }

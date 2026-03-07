@@ -1,3 +1,10 @@
+import {
+  EMBEDDED_HTTP_REQUEST,
+  isEmbeddedHTTPResponseResult,
+  type EmbeddedCommandInvoker,
+} from "./bridge.js";
+import { normalizeResponseBody, readRequestBody, responseHeaders } from "./transport-codec.js";
+
 export type NativeRequestBody = Uint8Array | ArrayBuffer | string | null | undefined;
 
 export type NativeResponseBody = Uint8Array | ArrayBuffer | string | null | undefined;
@@ -23,24 +30,8 @@ export interface NapiNativeHTTPModule {
   request: NativeRequestFn;
 }
 
-function toArrayBuffer(input: ArrayBufferLike | Uint8Array): ArrayBuffer {
-  const view = input instanceof Uint8Array ? input : new Uint8Array(input);
-  const copy = new Uint8Array(view.byteLength);
-  copy.set(view);
-  return copy.buffer;
-}
-
-function normalizeBody(body: NativeResponseBody): BodyInit | null {
-  if (body == null) {
-    return null;
-  }
-  if (typeof body === "string") {
-    return body;
-  }
-  if (body instanceof Uint8Array) {
-    return toArrayBuffer(body);
-  }
-  return toArrayBuffer(body);
+export interface NapiNativeCommandModule {
+  invoke: EmbeddedCommandInvoker;
 }
 
 function requestHeaders(headers: Headers): Record<string, string> {
@@ -51,35 +42,8 @@ function requestHeaders(headers: Headers): Record<string, string> {
   return out;
 }
 
-function responseHeaders(headers?: Record<string, string | readonly string[]>): Headers {
-  const out = new Headers();
-  if (!headers) {
-    return out;
-  }
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value === "string") {
-      out.set(key, value);
-      continue;
-    }
-    for (const v of value) {
-      out.append(key, v);
-    }
-  }
-  return out;
-}
-
 function abortError(): Error {
   return new DOMException("The operation was aborted", "AbortError");
-}
-
-async function readRequestBody(req: Request): Promise<NativeRequestBody> {
-  if (req.method === "GET" || req.method === "HEAD") {
-    return undefined;
-  }
-  if (req.body == null) {
-    return undefined;
-  }
-  return new Uint8Array(await req.arrayBuffer());
 }
 
 export function createFetchFromNativeRequest(nativeRequest: NativeRequestFn): FetchLike {
@@ -108,7 +72,7 @@ export function createFetchFromNativeRequest(nativeRequest: NativeRequestFn): Fe
         ])
       : await nativeCall;
 
-    return new Response(normalizeBody(response.body), {
+    return new Response(normalizeResponseBody(response.body), {
       status: response.status,
       statusText: response.statusText,
       headers: responseHeaders(response.headers),
@@ -118,4 +82,21 @@ export function createFetchFromNativeRequest(nativeRequest: NativeRequestFn): Fe
 
 export function createFetchFromNapiModule(module: NapiNativeHTTPModule): FetchLike {
   return createFetchFromNativeRequest(module.request);
+}
+
+export function createFetchFromNativeCommand(nativeInvoke: EmbeddedCommandInvoker): FetchLike {
+  return createFetchFromNativeRequest(async (request) => {
+    const result = await nativeInvoke({
+      type: EMBEDDED_HTTP_REQUEST,
+      request,
+    });
+    if (!isEmbeddedHTTPResponseResult(result)) {
+      throw new Error(`Embedded command returned ${result.type} for ${EMBEDDED_HTTP_REQUEST}.`);
+    }
+    return result.response;
+  });
+}
+
+export function createFetchFromNapiCommandModule(module: NapiNativeCommandModule): FetchLike {
+  return createFetchFromNativeCommand(module.invoke);
 }

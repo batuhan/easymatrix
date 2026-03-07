@@ -2,9 +2,34 @@ export { BeeperDesktop } from "@beeper/desktop-api";
 export type { ClientOptions } from "@beeper/desktop-api";
 
 export {
+  EMBEDDED_HTTP_REQUEST,
+  EMBEDDED_HTTP_RESPONSE,
+  EMBEDDED_RUNTIME_INFO,
+  type EmbeddedCommand,
+  type EmbeddedCommandInvoker,
+  type EmbeddedCommandResult,
+  type EmbeddedHTTPRequestCommand,
+  type EmbeddedHTTPResponseResult,
+  type EmbeddedRuntimeInfo,
+  type EmbeddedRuntimeInfoCommand,
+  type EmbeddedRuntimeInfoResult,
+  type EmbeddedRealtimeCommand,
+  type EmbeddedRealtimeEvent,
+  type EmbeddedRealtimeEventType,
+  type EmbeddedSubscriptionsSetCommand,
+  type EmbeddedReadyEvent,
+  type EmbeddedSubscriptionsUpdatedEvent,
+  type EmbeddedRealtimeErrorEvent,
+  type EmbeddedDomainEvent,
+} from "./bridge.js";
+
+export {
   createFetchFromNativeRequest,
+  createFetchFromNativeCommand,
   createFetchFromNapiModule,
+  createFetchFromNapiCommandModule,
   type FetchLike,
+  type NapiNativeCommandModule,
   type NapiNativeHTTPModule,
   type NativeRequest,
   type NativeRequestBody,
@@ -33,6 +58,13 @@ export {
   type WithEmbeddedOptions,
   type EmbeddedSDKHandle,
 } from "./client.js";
+
+export {
+  createEmbeddedRealtime,
+  type CreateEmbeddedRealtimeOptions,
+  type EmbeddedRealtimeAdapter,
+  type WaitForEmbeddedEventOptions,
+} from "./realtime.js";
 
 export { run, type RunOptions } from "./run.js";
 

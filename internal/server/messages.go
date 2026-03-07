@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -187,10 +186,7 @@ func (s *Server) editMessage(w http.ResponseWriter, r *http.Request) error {
 	if chatID == "" {
 		return errs.Validation(map[string]any{"chatID": "chatID is required"})
 	}
-	messageID := r.PathValue("messageID")
-	if messageID == "" {
-		messageID = req.MessageID
-	}
+	messageID := readMessageID(r, req.MessageID)
 	if messageID == "" {
 		return errs.Validation(map[string]any{"messageID": "messageID is required"})
 	}
@@ -231,10 +227,7 @@ func (s *Server) addReaction(w http.ResponseWriter, r *http.Request) error {
 	if chatID == "" {
 		return errs.Validation(map[string]any{"chatID": "chatID is required"})
 	}
-	messageID := r.PathValue("messageID")
-	if messageID == "" {
-		messageID = req.MessageID
-	}
+	messageID := readMessageID(r, req.MessageID)
 	if messageID == "" {
 		return errs.Validation(map[string]any{"messageID": "messageID is required"})
 	}
@@ -276,15 +269,14 @@ func (s *Server) removeReaction(w http.ResponseWriter, r *http.Request) error {
 		MessageID string `json:"messageID"`
 		compat.RemoveReactionInput
 	}
-	_ = decodeJSONIfPresent(r, &req)
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		return err
+	}
 	chatID := readChatID(r, req.ChatID)
 	if chatID == "" {
 		return errs.Validation(map[string]any{"chatID": "chatID is required"})
 	}
-	messageID := r.PathValue("messageID")
-	if messageID == "" {
-		messageID = req.MessageID
-	}
+	messageID := readMessageID(r, req.MessageID)
 	if messageID == "" {
 		return errs.Validation(map[string]any{"messageID": "messageID is required"})
 	}
@@ -722,19 +714,4 @@ func messageTypeFromAttachment(mimeType, hint string) event.MessageType {
 		return event.MsgAudio
 	}
 	return event.MsgFile
-}
-
-func decodeJSONIfPresent(r *http.Request, out any) error {
-	if r.Body == nil {
-		return nil
-	}
-	defer r.Body.Close()
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(out); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		return err
-	}
-	return nil
 }

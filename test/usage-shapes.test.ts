@@ -1,6 +1,8 @@
 import { BeeperDesktop } from "@beeper/desktop-api";
 
-import { createEmbeddedFetch, withEmbedded } from "../src/client.js";
+import { EMBEDDED_RUNTIME_INFO } from "../src/bridge.js";
+import { createEmbeddedFetch, createRuntimeHandle, withEmbedded } from "../src/client.js";
+import { createEmbeddedRealtime } from "../src/realtime.js";
 
 async function usage() {
   const embedded = await createEmbeddedFetch({
@@ -25,6 +27,14 @@ async function usage() {
     runtime: false,
   });
   void wrappedInstance.sdk;
+
+  const handle = await createRuntimeHandle({
+    runtime: false,
+  });
+  void handle.invoke({ type: EMBEDDED_RUNTIME_INFO });
+  void handle.createRealtime();
+
+  void createEmbeddedRealtime({ runtime: false });
 }
 
 void usage;

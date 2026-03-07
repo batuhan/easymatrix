@@ -11,6 +11,7 @@ import (
 	"time"
 
 	errs "github.com/batuhan/easymatrix/internal/errors"
+	beeperdesktopapi "github.com/beeper/desktop-api-go"
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
@@ -66,41 +67,43 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) error {
 	listenHost, listenPort, splitErr := net.SplitHostPort(s.cfg.ListenAddr)
 	if splitErr != nil {
 		listenHost = s.cfg.ListenAddr
-		listenPort = ""
+		listenPort = "0"
 	}
 	if strings.TrimSpace(listenHost) == "" {
 		listenHost = "localhost"
 	}
-	response := map[string]any{
-		"app": map[string]any{
-			"name":      "EasyMatrix",
-			"version":   appVersion,
-			"bundle_id": "com.beeper.desktop",
+	portValue, _ := strconv.ParseInt(strings.TrimSpace(listenPort), 10, 64)
+	response := beeperdesktopapi.InfoGetResponse{
+		App: beeperdesktopapi.InfoGetResponseApp{
+			Name:     "EasyMatrix",
+			Version:  appVersion,
+			BundleID: "com.beeper.desktop",
 		},
-		"platform": map[string]any{
-			"os":      runtime.GOOS,
-			"arch":    runtime.GOARCH,
-			"release": runtime.Version(),
+		Platform: beeperdesktopapi.InfoGetResponsePlatform{
+			Os:      runtime.GOOS,
+			Arch:    runtime.GOARCH,
+			Release: runtime.Version(),
 		},
-		"server": map[string]any{
-			"status":        serverStatus,
-			"base_url":      baseURL,
-			"port":          listenPort,
-			"hostname":      listenHost,
-			"remote_access": false,
-			"mcp_enabled":   false,
+		Server: beeperdesktopapi.InfoGetResponseServer{
+			Status:       serverStatus,
+			BaseURL:      baseURL,
+			Port:         portValue,
+			Hostname:     listenHost,
+			RemoteAccess: false,
+			McpEnabled:   false,
 		},
-		"endpoints": map[string]any{
-			"oauth": map[string]any{
-				"authorization_endpoint": baseURL + "/oauth/authorize",
-				"token_endpoint":         baseURL + "/oauth/token",
-				"introspection_endpoint": baseURL + "/oauth/introspect",
-				"userinfo_endpoint":      baseURL + "/oauth/userinfo",
-				"revocation_endpoint":    baseURL + "/oauth/revoke",
-				"registration_endpoint":  baseURL + "/oauth/register",
+		Endpoints: beeperdesktopapi.InfoGetResponseEndpoints{
+			Mcp: baseURL + "/mcp",
+			OAuth: beeperdesktopapi.InfoGetResponseEndpointsOAuth{
+				AuthorizationEndpoint: baseURL + "/oauth/authorize",
+				TokenEndpoint:         baseURL + "/oauth/token",
+				IntrospectionEndpoint: baseURL + "/oauth/introspect",
+				UserinfoEndpoint:      baseURL + "/oauth/userinfo",
+				RevocationEndpoint:    baseURL + "/oauth/revoke",
+				RegistrationEndpoint:  baseURL + "/oauth/register",
 			},
-			"spec":      baseURL + "/v1/spec",
-			"ws_events": baseURL + "/v1/ws",
+			Spec:     baseURL + "/v1/spec",
+			WsEvents: baseURL + "/v1/ws",
 		},
 	}
 	return writeJSON(w, response)

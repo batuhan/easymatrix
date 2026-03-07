@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-	"go.mau.fi/gomuks/pkg/hicli"
 	"go.mau.fi/gomuks/pkg/hicli/jsoncmd"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/id"
@@ -43,15 +42,15 @@ func (s *Server) manageState(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) getManageState() (manageStateOutput, error) {
-	cli, err := s.requireManageClient()
+	cli, err := s.rt.ClientState()
 	if err != nil {
 		return manageStateOutput{}, err
 	}
 	state := manageStateOutput{
-		ClientState: cli.State(),
+		ClientState: cli,
 	}
-	if cli.Client != nil && cli.Client.HomeserverURL != nil {
-		host := strings.ToLower(strings.TrimSpace(cli.Client.HomeserverURL.Hostname()))
+	if client := s.rt.Client(); client != nil && client.Client != nil && client.Client.HomeserverURL != nil {
+		host := strings.ToLower(strings.TrimSpace(client.Client.HomeserverURL.Hostname()))
 		state.HomeserverHost = host
 		state.IsBeeperHomeserver = isAllowedBeeperHomeserverHost(host)
 	}
@@ -72,22 +71,11 @@ func (s *Server) manageDiscoverHomeserver(w http.ResponseWriter, r *http.Request
 	if _, _, err := userID.Parse(); err != nil {
 		return errs.Validation(map[string]any{"userID": "must be a valid Matrix user ID"})
 	}
-	cli, err := s.requireManageClient()
+	discovery, err := s.rt.DiscoverHomeserver(r.Context(), userID)
 	if err != nil {
-		return err
+		return errs.Internal(err)
 	}
-	var discovery mautrix.ClientWellKnown
-	err = runHiCommand(
-		r.Context(),
-		cli,
-		jsoncmd.ReqDiscoverHomeserver,
-		&jsoncmd.DiscoverHomeserverParams{UserID: userID},
-		&discovery,
-	)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, &discovery)
+	return writeJSON(w, discovery)
 }
 
 func (s *Server) manageLoginFlows(w http.ResponseWriter, r *http.Request) error {
@@ -101,22 +89,11 @@ func (s *Server) manageLoginFlows(w http.ResponseWriter, r *http.Request) error 
 	if req.HomeserverURL == "" {
 		return errs.Validation(map[string]any{"homeserverURL": "homeserverURL is required"})
 	}
-	cli, err := s.requireManageClient()
+	loginFlows, err := s.rt.GetLoginFlows(r.Context(), req.HomeserverURL)
 	if err != nil {
-		return err
+		return errs.Internal(err)
 	}
-	var loginFlows mautrix.RespLoginFlows
-	err = runHiCommand(
-		r.Context(),
-		cli,
-		jsoncmd.ReqGetLoginFlows,
-		&jsoncmd.GetLoginFlowsParams{HomeserverURL: req.HomeserverURL},
-		&loginFlows,
-	)
-	if err != nil {
-		return err
-	}
-	return writeJSON(w, &loginFlows)
+	return writeJSON(w, loginFlows)
 }
 
 func (s *Server) manageLoginPassword(w http.ResponseWriter, r *http.Request) error {
@@ -139,24 +116,14 @@ func (s *Server) manageLoginPassword(w http.ResponseWriter, r *http.Request) err
 	if req.Password == "" {
 		return errs.Validation(map[string]any{"password": "password is required"})
 	}
-	cli, err := s.requireManageClient()
-	if err != nil {
-		return err
-	}
-	err = runHiCommand(
-		r.Context(),
-		cli,
-		jsoncmd.ReqLogin,
-		&jsoncmd.LoginParams{
-			HomeserverURL: req.HomeserverURL,
-			Username:      req.Username,
-			Password:      req.Password,
-		},
-		nil,
-	)
+	err := s.rt.Login(r.Context(), &jsoncmd.LoginParams{
+		HomeserverURL: req.HomeserverURL,
+		Username:      req.Username,
+		Password:      req.Password,
+	})
 	if err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
-			return err
+			return errs.Internal(err)
 		}
 	}
 	state, err := s.getManageState()
@@ -189,10 +156,6 @@ func (s *Server) manageLoginToken(w http.ResponseWriter, r *http.Request) error 
 	if req.LoginToken == "" {
 		return errs.Validation(map[string]any{"loginToken": "loginToken is required"})
 	}
-	cli, err := s.requireManageClient()
-	if err != nil {
-		return err
-	}
 	loginReq := &mautrix.ReqLogin{
 		Type:                     mautrix.AuthType("org.matrix.login.jwt"),
 		Token:                    req.LoginToken,
@@ -201,19 +164,13 @@ func (s *Server) manageLoginToken(w http.ResponseWriter, r *http.Request) error 
 	if req.DeviceID != "" {
 		loginReq.DeviceID = id.DeviceID(req.DeviceID)
 	}
-	err = runHiCommand(
-		r.Context(),
-		cli,
-		jsoncmd.ReqLoginCustom,
-		&jsoncmd.LoginCustomParams{
-			HomeserverURL: req.HomeserverURL,
-			Request:       loginReq,
-		},
-		nil,
-	)
+	err := s.rt.LoginCustom(r.Context(), &jsoncmd.LoginCustomParams{
+		HomeserverURL: req.HomeserverURL,
+		Request:       loginReq,
+	})
 	if err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
-			return err
+			return errs.Internal(err)
 		}
 	}
 	state, err := s.getManageState()
@@ -238,23 +195,13 @@ func (s *Server) manageLoginCustom(w http.ResponseWriter, r *http.Request) error
 	if strings.TrimSpace(string(req.Request.Type)) == "" {
 		return errs.Validation(map[string]any{"request": "request.type is required"})
 	}
-	cli, err := s.requireManageClient()
-	if err != nil {
-		return err
-	}
-	err = runHiCommand(
-		r.Context(),
-		cli,
-		jsoncmd.ReqLoginCustom,
-		&jsoncmd.LoginCustomParams{
-			HomeserverURL: req.HomeserverURL,
-			Request:       &req.Request,
-		},
-		nil,
-	)
+	err := s.rt.LoginCustom(r.Context(), &jsoncmd.LoginCustomParams{
+		HomeserverURL: req.HomeserverURL,
+		Request:       &req.Request,
+	})
 	if err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
-			return err
+			return errs.Internal(err)
 		}
 	}
 	state, err := s.getManageState()
@@ -275,19 +222,9 @@ func (s *Server) manageVerify(w http.ResponseWriter, r *http.Request) error {
 	if req.RecoveryKey == "" {
 		return errs.Validation(map[string]any{"recoveryKey": "recoveryKey is required"})
 	}
-	cli, err := s.requireManageClient()
+	err := s.rt.Verify(r.Context(), &jsoncmd.VerifyParams{RecoveryKey: req.RecoveryKey})
 	if err != nil {
-		return err
-	}
-	err = runHiCommand(
-		r.Context(),
-		cli,
-		jsoncmd.ReqVerify,
-		&jsoncmd.VerifyParams{RecoveryKey: req.RecoveryKey},
-		nil,
-	)
-	if err != nil {
-		return err
+		return errs.Internal(err)
 	}
 	state, err := s.getManageState()
 	if err != nil {
@@ -371,55 +308,6 @@ func (s *Server) manageBeeperSubmitCode(w http.ResponseWriter, r *http.Request) 
 		return writeJSONStatus(w, status, dataOrFallback(data, map[string]any{"error": "beeper code submission failed"}))
 	}
 	return writeJSON(w, dataOrFallback(data, map[string]any{}))
-}
-
-func (s *Server) requireManageClient() (*hicli.HiClient, error) {
-	cli := s.rt.Client()
-	if cli == nil || cli.Client == nil {
-		return nil, errs.Internal(fmt.Errorf("gomuks runtime is not initialized"))
-	}
-	return cli, nil
-}
-
-func runHiCommand(ctx context.Context, cli *hicli.HiClient, cmd jsoncmd.Name, params any, out any) error {
-	var payload json.RawMessage
-	if params == nil {
-		payload = []byte(`{}`)
-	} else {
-		raw, err := json.Marshal(params)
-		if err != nil {
-			return errs.Internal(fmt.Errorf("failed to encode %s params: %w", cmd, err))
-		}
-		payload = raw
-	}
-	resp := cli.SubmitJSONCommand(ctx, &hicli.JSONCommand{
-		Command: cmd,
-		Data:    payload,
-	})
-	if resp == nil {
-		return errs.Internal(fmt.Errorf("gomuks returned empty response for %s", cmd))
-	}
-	if resp.Command == jsoncmd.RespError {
-		var message string
-		if err := json.Unmarshal(resp.Data, &message); err != nil || strings.TrimSpace(message) == "" {
-			message = string(resp.Data)
-		}
-		message = strings.TrimSpace(message)
-		if message == "" {
-			message = "unknown error"
-		}
-		return errs.Internal(fmt.Errorf("gomuks %s failed: %s", cmd, message))
-	}
-	if resp.Command != jsoncmd.RespSuccess {
-		return errs.Internal(fmt.Errorf("gomuks returned unexpected response type %s for %s", resp.Command, cmd))
-	}
-	if out == nil {
-		return nil
-	}
-	if err := json.Unmarshal(resp.Data, out); err != nil {
-		return errs.Internal(fmt.Errorf("failed to decode %s response: %w", cmd, err))
-	}
-	return nil
 }
 
 func beeperAPIPost(ctx context.Context, rawDomain, endpoint string, payload any) (map[string]any, int, error) {

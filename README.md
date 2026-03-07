@@ -1,6 +1,6 @@
 # EasyMatrix
 
-EasyMatrix is a Beeper Desktop API-compatible headless Matrix client built on `gomuks`. It can be used with Desktop API JS SDK and even comes with an adapter that embeds the entire client (via N-API).
+EasyMatrix is a Beeper Desktop API-compatible headless Matrix client built on `gomuks`. It can be used with the Desktop API JS SDK and also ships an embedded Bun adapter backed by a native shared library.
 
 ## JS Adapter
 
@@ -73,7 +73,7 @@ If you set `BEEPER_LOGIN_TOKEN` or `BEEPER_USERNAME`/`BEEPER_PASSWORD`, plus `BE
 
 ## Embedded Bun Runtime
 
-The embedded runtime is Bun-only and follows the same long-lived native runtime pattern gomuks uses for its JS-facing environments: start one native client, then talk to it through a narrow request/event bridge.
+The embedded runtime is Bun-only and follows the same long-lived native runtime pattern gomuks uses for its JS-facing environments: start one native client, dispatch JSON commands into it, and consume typed realtime events back out of it.
 
 Current embedded options support the same startup auth inputs as server mode:
 
@@ -85,7 +85,13 @@ Current embedded options support the same startup auth inputs as server mode:
 Example:
 
 ```ts
-import { BeeperDesktop, withEmbedded } from "@bi/easymatrix";
+import {
+  BeeperDesktop,
+  EMBEDDED_RUNTIME_INFO,
+  createEmbeddedRealtime,
+  createRuntimeHandle,
+  withEmbedded,
+} from "@bi/easymatrix";
 
 const embedded = await withEmbedded(BeeperDesktop, {
   runtime: {
@@ -98,6 +104,19 @@ const embedded = await withEmbedded(BeeperDesktop, {
 });
 
 const accounts = await embedded.sdk.accounts.list();
+
+const runtime = await createRuntimeHandle({
+  runtime: embedded.runtime,
+});
+
+const info = await runtime.invoke({ type: EMBEDDED_RUNTIME_INFO });
+const realtime = await createEmbeddedRealtime({ runtime: embedded.runtime });
+
+realtime.setSubscriptions(["*"]);
+realtime.addEventListener("message.upserted", (event) => {
+  const detail = (event as CustomEvent).detail;
+  console.log(detail);
+});
 ```
 
 The native library must still be built first:
@@ -105,6 +124,8 @@ The native library must still be built first:
 ```bash
 npm run build
 ```
+
+`npm run build` now copies the native shared library into `dist/native`, so installed package builds resolve their own artifact by default instead of assuming a repo-local `bin/` layout. You can still override it with `nativeLibraryPath` or `EASYMATRIX_NATIVE_LIBRARY_PATH`.
 
 ## CLI Login
 

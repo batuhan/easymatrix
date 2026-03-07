@@ -216,41 +216,19 @@ func (s *Server) loadAccounts(ctx context.Context) ([]compat.Account, error) {
 
 			desktopAccountID := bridgeID + "_" + remoteID
 			network := networkFromBridgeID(bridgeID)
-			fullName := firstString(bridgeAccount.ProfileData, "name", "display_name", "displayName")
-			if fullName == "" {
-				fullName = remoteID
-			}
-			self := true
-			cannotMessage := false
 			accounts = append(accounts, compat.Account{
 				AccountID: desktopAccountID,
 				Network:   network,
-				User: compat.User{
-					ID:            remoteID,
-					Username:      firstString(bridgeAccount.ProfileData, "username", "handle"),
-					PhoneNumber:   firstString(bridgeAccount.ProfileData, "phone", "phone_number"),
-					Email:         firstString(bridgeAccount.ProfileData, "email"),
-					FullName:      fullName,
-					ImgURL:        firstString(bridgeAccount.ProfileData, "avatar", "avatar_url"),
-					CannotMessage: cannotMessage,
-					IsSelf:        self,
-				},
+				User:      userFromLocalBridgeProfile(remoteID, bridgeAccount.ProfileData),
 			})
 		}
 	}
 
 	if len(accounts) == 0 {
-		self := true
-		cannotMessage := false
 		accounts = append(accounts, compat.Account{
 			AccountID: "matrix_" + string(cli.Account.UserID),
 			Network:   "Matrix",
-			User: compat.User{
-				ID:            string(cli.Account.UserID),
-				FullName:      string(cli.Account.UserID),
-				CannotMessage: cannotMessage,
-				IsSelf:        self,
-			},
+			User:      newCompatUser(userShape{ID: string(cli.Account.UserID), IsSelf: true}),
 		})
 	}
 
@@ -559,19 +537,7 @@ func (s *Server) loadRoomParticipants(ctx context.Context, room *database.Room) 
 			continue
 		}
 		seen[userID] = struct{}{}
-		cannotMessage := false
-		isSelf := userID == string(cli.Account.UserID)
-		fullName := strings.TrimSpace(content.Displayname)
-		if fullName == "" {
-			fullName = userID
-		}
-		users = append(users, compat.User{
-			ID:            userID,
-			FullName:      fullName,
-			ImgURL:        string(content.AvatarURL),
-			CannotMessage: cannotMessage,
-			IsSelf:        isSelf,
-		})
+		users = append(users, userFromMemberEvent(userID, content, string(cli.Account.UserID)))
 	}
 
 	sort.Slice(users, func(i, j int) bool {

@@ -6,7 +6,13 @@ import (
 )
 
 type User = shared.User
-type Account = beeperdesktopapi.Account
+
+type Account struct {
+	AccountID string `json:"accountID"`
+	User      User   `json:"user"`
+	Network   string `json:"network,omitempty"`
+}
+
 type Participants = beeperdesktopapi.ChatParticipants
 type Attachment = shared.Attachment
 type AttachmentType = shared.AttachmentType
@@ -66,20 +72,9 @@ type SearchMessagesOutput struct {
 type SendMessageOutput = beeperdesktopapi.MessageSendResponse
 type EditMessageOutput = beeperdesktopapi.MessageUpdateResponse
 
-type AddReactionOutput struct {
-	Success       bool   `json:"success"`
-	ChatID        string `json:"chatID"`
-	MessageID     string `json:"messageID"`
-	ReactionKey   string `json:"reactionKey"`
-	TransactionID string `json:"transactionID"`
-}
+type AddReactionOutput = beeperdesktopapi.ChatMessageReactionAddResponse
 
-type RemoveReactionOutput struct {
-	Success     bool   `json:"success"`
-	ChatID      string `json:"chatID"`
-	MessageID   string `json:"messageID"`
-	ReactionKey string `json:"reactionKey"`
-}
+type RemoveReactionOutput = beeperdesktopapi.ChatMessageReactionDeleteResponse
 
 type DownloadAssetInput = beeperdesktopapi.AssetDownloadParams
 type DownloadAssetOutput = beeperdesktopapi.AssetDownloadResponse

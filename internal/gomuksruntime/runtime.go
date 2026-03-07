@@ -2,7 +2,6 @@ package gomuksruntime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -167,19 +166,13 @@ func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuk
 
 	state := cli.State()
 	if hasLoginToken && !state.IsLoggedIn {
-		err := runHiCommand(
-			ctx,
-			cli,
-			jsoncmd.ReqLoginCustom,
-			&jsoncmd.LoginCustomParams{
-				HomeserverURL: r.cfg.BeeperHomeserverURL,
-				Request: &mautrix.ReqLogin{
-					Type:  mautrix.AuthType("org.matrix.login.jwt"),
-					Token: r.cfg.BeeperLoginToken,
-				},
+		err := r.LoginCustom(ctx, &jsoncmd.LoginCustomParams{
+			HomeserverURL: r.cfg.BeeperHomeserverURL,
+			Request: &mautrix.ReqLogin{
+				Type:  mautrix.AuthType("org.matrix.login.jwt"),
+				Token: r.cfg.BeeperLoginToken,
 			},
-			nil,
-		)
+		})
 		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
 			return fmt.Errorf("failed to login using env login token: %w", err)
 		}
@@ -188,17 +181,11 @@ func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuk
 
 	state = cli.State()
 	if hasPasswordLogin && !state.IsLoggedIn {
-		err := runHiCommand(
-			ctx,
-			cli,
-			jsoncmd.ReqLogin,
-			&jsoncmd.LoginParams{
-				HomeserverURL: r.cfg.BeeperHomeserverURL,
-				Username:      r.cfg.BeeperUsername,
-				Password:      r.cfg.BeeperPassword,
-			},
-			nil,
-		)
+		err := r.Login(ctx, &jsoncmd.LoginParams{
+			HomeserverURL: r.cfg.BeeperHomeserverURL,
+			Username:      r.cfg.BeeperUsername,
+			Password:      r.cfg.BeeperPassword,
+		})
 		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
 			return fmt.Errorf("failed to login using env credentials: %w", err)
 		}
@@ -210,60 +197,11 @@ func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuk
 		if !state.IsLoggedIn {
 			return errors.New("BEEPER_RECOVERY_KEY was provided, but no logged-in session is available")
 		}
-		if err := runHiCommand(
-			ctx,
-			cli,
-			jsoncmd.ReqVerify,
-			&jsoncmd.VerifyParams{RecoveryKey: r.cfg.BeeperRecoveryKey},
-			nil,
-		); err != nil {
+		if err := r.Verify(ctx, &jsoncmd.VerifyParams{RecoveryKey: r.cfg.BeeperRecoveryKey}); err != nil {
 			return fmt.Errorf("failed to verify using env recovery key: %w", err)
 		}
 		gmx.Log.Info().Msg("beeper verification completed from environment")
 	}
 
-	return nil
-}
-
-func runHiCommand(ctx context.Context, cli *hicli.HiClient, cmd jsoncmd.Name, params any, out any) error {
-	var payload json.RawMessage
-	if params == nil {
-		payload = []byte(`{}`)
-	} else {
-		raw, err := json.Marshal(params)
-		if err != nil {
-			return fmt.Errorf("failed to encode %s params: %w", cmd, err)
-		}
-		payload = raw
-	}
-
-	resp := cli.SubmitJSONCommand(ctx, &hicli.JSONCommand{
-		Command: cmd,
-		Data:    payload,
-	})
-	if resp == nil {
-		return fmt.Errorf("gomuks returned empty response for %s", cmd)
-	}
-	if resp.Command == jsoncmd.RespError {
-		var message string
-		if err := json.Unmarshal(resp.Data, &message); err != nil || strings.TrimSpace(message) == "" {
-			message = string(resp.Data)
-		}
-		message = strings.TrimSpace(message)
-		if message == "" {
-			message = "unknown error"
-		}
-		return fmt.Errorf("gomuks %s failed: %s", cmd, message)
-	}
-	if resp.Command != jsoncmd.RespSuccess {
-		return fmt.Errorf("gomuks returned unexpected response type %s for %s", resp.Command, cmd)
-	}
-
-	if out == nil {
-		return nil
-	}
-	if err := json.Unmarshal(resp.Data, out); err != nil {
-		return fmt.Errorf("failed to decode %s response: %w", cmd, err)
-	}
 	return nil
 }

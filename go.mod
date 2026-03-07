@@ -3,7 +3,7 @@ module github.com/batuhan/easymatrix
 go 1.24.0
 
 require (
-	github.com/beeper/desktop-api-go v0.3.0
+	github.com/beeper/desktop-api-go v0.4.0
 	github.com/coder/websocket v1.8.14
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.3.0

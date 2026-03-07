@@ -32,6 +32,31 @@ type Response struct {
 	BodyB64    string              `json:"body_base64,omitempty"`
 }
 
+const (
+	CommandTypeHTTPRequest = "http.request"
+	CommandTypeRuntimeInfo = "runtime.info"
+
+	CommandResultTypeHTTPResponse = "http.response"
+	CommandResultTypeRuntimeInfo  = "runtime.info"
+)
+
+type Command struct {
+	Type    string   `json:"type"`
+	Request *Request `json:"request,omitempty"`
+}
+
+type RuntimeInfo struct {
+	Started    bool   `json:"started"`
+	ListenAddr string `json:"listenAddr,omitempty"`
+	StateDir   string `json:"stateDir,omitempty"`
+}
+
+type CommandResult struct {
+	Type        string       `json:"type"`
+	Response    *Response    `json:"response,omitempty"`
+	RuntimeInfo *RuntimeInfo `json:"runtimeInfo,omitempty"`
+}
+
 type Config struct {
 	ListenAddr          string `json:"listenAddr,omitempty"`
 	AccessToken         string `json:"accessToken,omitempty"`
@@ -99,7 +124,56 @@ func (r *Runtime) StateDir() string {
 	return r.cfg.StateDir
 }
 
+func (r *Runtime) RuntimeInfo() RuntimeInfo {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return RuntimeInfo{
+		Started:    r.started,
+		ListenAddr: r.cfg.ListenAddr,
+		StateDir:   r.cfg.StateDir,
+	}
+}
+
+func (r *Runtime) Execute(ctx context.Context, cmd Command) (CommandResult, error) {
+	switch strings.TrimSpace(cmd.Type) {
+	case CommandTypeHTTPRequest:
+		if cmd.Request == nil {
+			return CommandResult{}, fmt.Errorf("missing request payload")
+		}
+		resp, err := r.handleRequest(ctx, *cmd.Request)
+		if err != nil {
+			return CommandResult{}, err
+		}
+		return CommandResult{
+			Type:     CommandResultTypeHTTPResponse,
+			Response: &resp,
+		}, nil
+	case CommandTypeRuntimeInfo:
+		info := r.RuntimeInfo()
+		return CommandResult{
+			Type:        CommandResultTypeRuntimeInfo,
+			RuntimeInfo: &info,
+		}, nil
+	default:
+		return CommandResult{}, fmt.Errorf("unsupported command type %q", cmd.Type)
+	}
+}
+
 func (r *Runtime) Handle(ctx context.Context, req Request) (Response, error) {
+	result, err := r.Execute(ctx, Command{
+		Type:    CommandTypeHTTPRequest,
+		Request: &req,
+	})
+	if err != nil {
+		return Response{}, err
+	}
+	if result.Response == nil {
+		return Response{}, fmt.Errorf("command %q returned no response", result.Type)
+	}
+	return *result.Response, nil
+}
+
+func (r *Runtime) handleRequest(ctx context.Context, req Request) (Response, error) {
 	if err := r.Start(ctx); err != nil {
 		return Response{}, err
 	}

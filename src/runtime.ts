@@ -2,7 +2,18 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  EMBEDDED_HTTP_REQUEST,
+  EMBEDDED_HTTP_RESPONSE,
+  EMBEDDED_RUNTIME_INFO,
+  isEmbeddedHTTPResponseResult,
+  isEmbeddedRuntimeInfoResult,
+  type EmbeddedCommand,
+  type EmbeddedCommandResult,
+  type EmbeddedRuntimeInfo,
+} from "./bridge.js";
 import type { NativeRequest, NativeResponse } from "./native-fetch.js";
+import { normalizeHeaderRecord } from "./transport-codec.js";
 
 export interface EmbeddedRuntimeOptions {
   nativeLibraryPath?: string;
@@ -50,10 +61,23 @@ interface FFIResponsePayload {
   body_base64?: string;
 }
 
+interface FFIRuntimeInfoPayload {
+  started?: boolean;
+  listenAddr?: string;
+  stateDir?: string;
+}
+
+interface FFICommandResultPayload {
+  error?: string;
+  type?: string;
+  response?: FFIResponsePayload;
+  runtimeInfo?: FFIRuntimeInfoPayload;
+}
+
 type BunFFIModule = typeof import("bun:ffi");
 
 const RUNTIME_FILE_DIR = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_REPO_ROOT = resolve(RUNTIME_FILE_DIR, "..");
+const NATIVE_LIBRARY_ENV = "EASYMATRIX_NATIVE_LIBRARY_PATH";
 
 function assertBunRuntime(): void {
   if (typeof Bun === "undefined") {
@@ -61,8 +85,43 @@ function assertBunRuntime(): void {
   }
 }
 
-function defaultNativeLibraryPath(suffix: string): string {
-  return resolve(DEFAULT_REPO_ROOT, "bin", `libeasymatrixffi.${suffix}`);
+function nativeLibraryFilename(suffix: string): string {
+  return `libeasymatrixffi.${suffix}`;
+}
+
+function candidateNativeLibraryPaths(suffix: string): string[] {
+  const filename = nativeLibraryFilename(suffix);
+  const candidates = [
+    process.env[NATIVE_LIBRARY_ENV],
+    resolve(RUNTIME_FILE_DIR, "native", filename),
+    resolve(RUNTIME_FILE_DIR, "..", "dist", "native", filename),
+    resolve(RUNTIME_FILE_DIR, "..", "bin", filename),
+  ];
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    deduped.push(candidate);
+  }
+  return deduped;
+}
+
+function resolveNativeLibraryPath(explicitPath: string | undefined, suffix: string): string {
+  if (explicitPath) {
+    return explicitPath;
+  }
+  const candidates = candidateNativeLibraryPaths(suffix);
+  const match = candidates.find((candidate) => existsSync(candidate));
+  if (match) {
+    return match;
+  }
+  throw new Error(
+    `Native library not found. Searched: ${candidates.join(", ")}. ` +
+      `Build the package first or set ${NATIVE_LIBRARY_ENV}.`,
+  );
 }
 
 function decodeBody(bodyBase64?: string): Uint8Array | undefined {
@@ -81,17 +140,6 @@ function encodeBody(body?: Uint8Array | ArrayBuffer | string | null): string | u
   }
   const bytes = body instanceof Uint8Array ? body : new Uint8Array(body);
   return Buffer.from(bytes).toString("base64");
-}
-
-function normalizeHeaders(headers?: Record<string, string | readonly string[]>): Record<string, string[]> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const out: Record<string, string[]> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    out[key] = typeof value === "string" ? [value] : [...value];
-  }
-  return out;
 }
 
 class RealtimeConnection extends EventTarget implements EmbeddedRealtimeConnection {
@@ -195,10 +243,7 @@ export class EmbeddedRuntime {
     }
     assertBunRuntime();
     const ffi = await import("bun:ffi");
-    const nativeLibraryPath = this.options.nativeLibraryPath ?? defaultNativeLibraryPath(ffi.suffix);
-    if (!existsSync(nativeLibraryPath)) {
-      throw new Error(`Native library not found at ${nativeLibraryPath}. Build bin/libeasymatrixffi.${ffi.suffix} first.`);
-    }
+    const nativeLibraryPath = resolveNativeLibraryPath(this.options.nativeLibraryPath, ffi.suffix);
 
     const lib: any = ffi.dlopen(nativeLibraryPath, {
       EasyMatrixCreate: {
@@ -217,7 +262,7 @@ export class EmbeddedRuntime {
         args: ["u64"],
         returns: "void",
       },
-      EasyMatrixHandleRequest: {
+      EasyMatrixInvoke: {
         args: ["u64", "cstring"],
         returns: "ptr",
       },
@@ -312,28 +357,56 @@ export class EmbeddedRuntime {
     await this.stop();
   }
 
-  async request(request: NativeRequest): Promise<NativeResponse> {
+  async invoke(command: EmbeddedCommand): Promise<EmbeddedCommandResult> {
     await this.start();
     const response = this.parseJSONPointer(
-      this.lib!.symbols.EasyMatrixHandleRequest(
-        this.handle!,
-        JSON.stringify({
-          method: request.method,
-          url: request.url,
-          headers: normalizeHeaders(request.headers),
-          body_base64: encodeBody(request.body ?? null),
-        }),
-      ),
-    ) as FFIResponsePayload;
+      this.lib!.symbols.EasyMatrixInvoke(this.handle!, JSON.stringify(this.serializeCommand(command))),
+    ) as FFICommandResultPayload;
     if (response.error) {
       throw new Error(response.error);
     }
-    return {
-      status: response.status ?? 500,
-      statusText: response.statusText,
-      headers: response.headers,
-      body: decodeBody(response.body_base64),
-    };
+    switch (response.type) {
+      case EMBEDDED_HTTP_RESPONSE:
+        return {
+          type: EMBEDDED_HTTP_RESPONSE,
+          response: {
+            status: response.response?.status ?? 500,
+            statusText: response.response?.statusText,
+            headers: response.response?.headers,
+            body: decodeBody(response.response?.body_base64),
+          },
+        };
+      case EMBEDDED_RUNTIME_INFO:
+        return {
+          type: EMBEDDED_RUNTIME_INFO,
+          runtimeInfo: {
+            started: response.runtimeInfo?.started ?? false,
+            listenAddr: response.runtimeInfo?.listenAddr,
+            stateDir: response.runtimeInfo?.stateDir,
+          },
+        };
+      default:
+        throw new Error(`Embedded runtime returned unsupported command result ${JSON.stringify(response)}.`);
+    }
+  }
+
+  async request(request: NativeRequest): Promise<NativeResponse> {
+    const result = await this.invoke({
+      type: EMBEDDED_HTTP_REQUEST,
+      request,
+    });
+    if (!isEmbeddedHTTPResponseResult(result)) {
+      throw new Error(`Embedded command returned ${result.type} for ${EMBEDDED_HTTP_REQUEST}.`);
+    }
+    return result.response;
+  }
+
+  async runtimeInfo(): Promise<EmbeddedRuntimeInfo> {
+    const result = await this.invoke({ type: EMBEDDED_RUNTIME_INFO });
+    if (!isEmbeddedRuntimeInfoResult(result)) {
+      throw new Error(`Embedded command returned ${result.type} for ${EMBEDDED_RUNTIME_INFO}.`);
+    }
+    return result.runtimeInfo;
   }
 
   async connectRealtime(): Promise<EmbeddedRealtimeConnection> {
@@ -377,6 +450,21 @@ export class EmbeddedRuntime {
     }
     this.realtimeConnections.delete(connectionID);
     this.lib.symbols.EasyMatrixRealtimeClose(this.handle, connectionID);
+  }
+
+  private serializeCommand(command: EmbeddedCommand): unknown {
+    if (command.type !== EMBEDDED_HTTP_REQUEST) {
+      return command;
+    }
+    return {
+      type: EMBEDDED_HTTP_REQUEST,
+      request: {
+        method: command.request.method,
+        url: command.request.url,
+        headers: normalizeHeaderRecord(command.request.headers),
+        body_base64: encodeBody(command.request.body ?? null),
+      },
+    };
   }
 }
 

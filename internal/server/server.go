@@ -254,16 +254,7 @@ func parseChatCursor(raw string) (*cursor.ChatCursor, error) {
 }
 
 func parseAccountIDs(r *http.Request) []string {
-	var accountIDs []string
-	for _, raw := range r.URL.Query()["accountIDs"] {
-		for _, part := range strings.Split(raw, ",") {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				accountIDs = append(accountIDs, part)
-			}
-		}
-	}
-	return accountIDs
+	return parseCSVQueryValues(r.URL.Query()["accountIDs"])
 }
 
 func equalsAny(value string, candidates []string) bool {

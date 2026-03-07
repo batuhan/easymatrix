@@ -61,6 +61,18 @@ func runtimeFromHandle(handle C.EasyMatrixHandle) *ffiRuntime {
 	return cgo.Handle(handle).Value().(*ffiRuntime)
 }
 
+func invokeJSON(rt *ffiRuntime, payload string) *C.char {
+	var cmd embedded.Command
+	if err := json.Unmarshal([]byte(payload), &cmd); err != nil {
+		return marshalResult(map[string]any{"error": fmt.Sprintf("invalid command: %v", err)})
+	}
+	result, err := rt.runtime.Execute(context.Background(), cmd)
+	if err != nil {
+		return marshalResult(map[string]any{"error": err.Error()})
+	}
+	return marshalResult(result)
+}
+
 //export EasyMatrixCreate
 func EasyMatrixCreate(cfgJSON *C.char) C.EasyMatrixHandle {
 	var cfg embedded.Config
@@ -111,16 +123,27 @@ func EasyMatrixDestroy(handle C.EasyMatrixHandle) {
 
 //export EasyMatrixHandleRequest
 func EasyMatrixHandleRequest(handle C.EasyMatrixHandle, reqJSON *C.char) *C.char {
-	rt := runtimeFromHandle(handle)
 	var req embedded.Request
 	if err := json.Unmarshal([]byte(goString(reqJSON)), &req); err != nil {
 		return marshalResult(map[string]any{"error": fmt.Sprintf("invalid request: %v", err)})
 	}
-	resp, err := rt.runtime.Handle(context.Background(), req)
+	return invokeJSON(runtimeFromHandle(handle), string(mustJSONMarshal(embedded.Command{
+		Type:    embedded.CommandTypeHTTPRequest,
+		Request: &req,
+	})))
+}
+
+func mustJSONMarshal(value any) []byte {
+	raw, err := json.Marshal(value)
 	if err != nil {
-		return marshalResult(map[string]any{"error": err.Error()})
+		panic(err)
 	}
-	return marshalResult(resp)
+	return raw
+}
+
+//export EasyMatrixInvoke
+func EasyMatrixInvoke(handle C.EasyMatrixHandle, cmdJSON *C.char) *C.char {
+	return invokeJSON(runtimeFromHandle(handle), goString(cmdJSON))
 }
 
 //export EasyMatrixRealtimeConnect

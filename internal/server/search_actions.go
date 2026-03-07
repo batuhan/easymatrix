@@ -183,19 +183,14 @@ func (s *Server) searchUsersV0(w http.ResponseWriter, r *http.Request) error {
 		if user == nil {
 			continue
 		}
-		fullName := strings.TrimSpace(user.DisplayName)
-		if fullName == "" {
-			fullName = user.UserID.String()
-		}
-		username := strings.TrimPrefix(strings.SplitN(user.UserID.String(), ":", 2)[0], "@")
-		items = append(items, compat.User{
+		items = append(items, newCompatUser(userShape{
 			ID:            user.UserID.String(),
-			Username:      username,
-			FullName:      fullName,
+			Username:      userIDLocalpart(user.UserID.String()),
+			FullName:      user.DisplayName,
 			ImgURL:        user.AvatarURL.String(),
 			CannotMessage: false,
 			IsSelf:        user.UserID == s.rt.Client().Account.UserID,
-		})
+		}))
 	}
 	return writeJSON(w, compat.SearchContactsOutput{Items: items})
 }
@@ -337,8 +332,8 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) error {
 
 func (s *Server) focusApp(w http.ResponseWriter, r *http.Request) error {
 	var req compat.FocusAppInput
-	if err := decodeJSONIfPresent(r, &req); err != nil {
-		return errs.Validation(map[string]any{"error": err.Error()})
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		return err
 	}
 	chatID := ""
 	if req.ChatID.Valid() {
@@ -580,8 +575,8 @@ func (s *Server) archiveChat(w http.ResponseWriter, r *http.Request) error {
 		Archived *bool  `json:"archived,omitempty"`
 		ChatID   string `json:"chatID,omitempty"`
 	}
-	if err := decodeJSONIfPresent(r, &req); err != nil {
-		return errs.Validation(map[string]any{"error": err.Error()})
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		return err
 	}
 	chatID := readChatID(r, req.ChatID)
 	if chatID == "" {
@@ -637,8 +632,8 @@ func (s *Server) clearChatReminder(w http.ResponseWriter, r *http.Request) error
 	var req struct {
 		ChatID string `json:"chatID,omitempty"`
 	}
-	if err := decodeJSONIfPresent(r, &req); err != nil {
-		return errs.Validation(map[string]any{"error": err.Error()})
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		return err
 	}
 	chatID := readChatID(r, req.ChatID)
 	if chatID == "" {
@@ -893,18 +888,14 @@ func (s *Server) mapDirectoryUserToContact(user *mautrix.UserDirectoryEntry) com
 	if user == nil {
 		return compat.User{}
 	}
-	fullName := strings.TrimSpace(user.DisplayName)
-	if fullName == "" {
-		fullName = user.UserID.String()
-	}
-	return compat.User{
-		ID:            strings.TrimSpace(user.UserID.String()),
+	return newCompatUser(userShape{
+		ID:            user.UserID.String(),
 		Username:      userIDLocalpart(user.UserID.String()),
-		FullName:      fullName,
+		FullName:      user.DisplayName,
 		ImgURL:        user.AvatarURL.String(),
 		CannotMessage: false,
 		IsSelf:        user.UserID == s.rt.Client().Account.UserID,
-	}
+	})
 }
 
 func (s *Server) mapResolvedIdentifierToUser(resolved *provisionutil.RespResolveIdentifier) compat.User {
@@ -931,16 +922,16 @@ func (s *Server) mapResolvedIdentifierToUser(resolved *provisionutil.RespResolve
 	if s.rt.Client() != nil && s.rt.Client().Account != nil {
 		selfUserID = string(s.rt.Client().Account.UserID)
 	}
-	return compat.User{
+	return newCompatUser(userShape{
 		ID:            userID,
 		Username:      username,
 		PhoneNumber:   phoneNumber,
 		Email:         email,
-		FullName:      strings.TrimSpace(resolved.Name),
-		ImgURL:        strings.TrimSpace(string(resolved.AvatarURL)),
+		FullName:      resolved.Name,
+		ImgURL:        string(resolved.AvatarURL),
 		CannotMessage: false,
 		IsSelf:        userIDMatches(userID, selfUserID),
-	}
+	})
 }
 
 func splitDesktopAccountID(accountID string) (bridgeID, loginID string) {
@@ -1615,16 +1606,7 @@ func parseSearchMessagesParams(r *http.Request) (searchMessagesParams, error) {
 }
 
 func parseStringListParam(r *http.Request, key string) []string {
-	values := make([]string, 0)
-	for _, raw := range r.URL.Query()[key] {
-		for _, part := range strings.Split(raw, ",") {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				values = append(values, part)
-			}
-		}
-	}
-	return values
+	return parseCSVQueryValues(r.URL.Query()[key])
 }
 
 func parseEnumList(r *http.Request, key string, allowed []string) ([]string, error) {
