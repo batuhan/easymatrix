@@ -97,3 +97,41 @@ func TestInfoIncludesTypedMCPField(t *testing.T) {
 		t.Fatal("expected /v1/info to include endpoints.mcp")
 	}
 }
+
+func TestWebhookRoutesAreRegistered(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:          "127.0.0.1:0",
+		StateDir:            t.TempDir(),
+		AccessToken:         "test-token",
+		MatrixHomeserverURL: "https://matrix.beeper.com",
+	}
+	rt, err := gomuksruntime.New(cfg)
+	if err != nil {
+		t.Fatalf("failed to create runtime: %v", err)
+	}
+	handler := New(cfg, rt).Handler()
+
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/v1/webhooks/events"},
+		{method: http.MethodGet, path: "/v1/webhooks"},
+		{method: http.MethodPost, path: "/v1/webhooks"},
+		{method: http.MethodGet, path: "/v1/webhooks/abc"},
+		{method: http.MethodPatch, path: "/v1/webhooks/abc"},
+		{method: http.MethodDelete, path: "/v1/webhooks/abc"},
+		{method: http.MethodPost, path: "/v1/webhooks/abc/test"},
+		{method: http.MethodGet, path: "/v1/webhooks/abc/deliveries"},
+		{method: http.MethodGet, path: "/v1/webhook-deliveries/delivery1"},
+		{method: http.MethodPost, path: "/v1/webhook-deliveries/delivery1/retry"},
+	}
+	for _, testCase := range cases {
+		req := httptest.NewRequest(testCase.method, testCase.path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code == http.StatusNotFound {
+			t.Fatalf("%s %s returned 404, expected route to exist", testCase.method, testCase.path)
+		}
+	}
+}

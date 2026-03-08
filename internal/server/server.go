@@ -30,6 +30,8 @@ type Server struct {
 	oauthState   string
 
 	ws *wsHub
+
+	webhooks *webhookManager
 }
 
 type apiHandler func(http.ResponseWriter, *http.Request) error
@@ -53,6 +55,10 @@ func New(cfg config.Config, rt *gomuksruntime.Runtime) *Server {
 	}
 	s.auth.SetTokenInfoProvider(s.tokenInfoForBearer)
 	s.ws = newWSHub(s)
+	s.webhooks = newWebhookManager(s, filepath.Join(rt.StateDir(), "webhooks", "state.json"))
+	if err := s.webhooks.start(); err != nil {
+		log.Printf("failed to start webhook manager: %v", err)
+	}
 	return s
 }
 
@@ -91,6 +97,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /focus/{chatID}/{messageID}", s.public(s.focusPage))
 
 	s.handle(mux, "GET /v1/accounts", s.getAccounts, false, "read")
+
+	s.handle(mux, "GET /v1/webhooks/events", s.listWebhookEvents, false, "read")
+	s.handle(mux, "POST /v1/webhooks", s.createWebhook, false, "write")
+	s.handle(mux, "GET /v1/webhooks", s.listWebhooks, false, "read")
+	s.handle(mux, "GET /v1/webhooks/{webhookID}", s.getWebhook, false, "read")
+	s.handle(mux, "PATCH /v1/webhooks/{webhookID}", s.updateWebhook, false, "write")
+	s.handle(mux, "DELETE /v1/webhooks/{webhookID}", s.deleteWebhook, false, "write")
+	s.handle(mux, "POST /v1/webhooks/{webhookID}/test", s.testWebhook, false, "write")
+	s.handle(mux, "GET /v1/webhooks/{webhookID}/deliveries", s.listWebhookDeliveries, false, "read")
+	s.handle(mux, "GET /v1/webhook-deliveries/{deliveryID}", s.getWebhookDelivery, false, "read")
+	s.handle(mux, "POST /v1/webhook-deliveries/{deliveryID}/retry", s.retryWebhookDelivery, false, "write")
 
 	s.handle(mux, "GET /v1/chats", s.listChats, false, "read")
 	s.handle(mux, "POST /v1/chats", s.createChat, false, "write")

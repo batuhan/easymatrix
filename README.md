@@ -277,6 +277,89 @@ Typical event families:
 - `message.deleted`
 - `error`
 
+## Webhooks (API-managed)
+
+EasyMatrix includes a Stripe-inspired webhook system with API-first management, signed payloads, and retry backoff.
+
+### Event envelope
+
+Outbound webhook payloads follow a Stripe-like shape:
+
+```json
+{
+  "id": "evt_...",
+  "type": "message.upserted",
+  "created": 1733347200,
+  "livemode": true,
+  "data": {
+    "object": {
+      "chatID": "!room:matrix.beeper.com",
+      "ids": ["$event:matrix.beeper.com"],
+      "entries": []
+    }
+  },
+  "request": {
+    "id": "evt_...",
+    "source": "sync"
+  }
+}
+```
+
+Supported event types:
+
+- `chat.upserted`
+- `chat.deleted`
+- `message.upserted`
+- `message.deleted`
+- `test.event`
+
+### Signature headers
+
+Each delivery includes:
+
+- `webhook-id`
+- `webhook-timestamp`
+- `webhook-signature`
+
+Canonical signed value:
+
+```text
+{webhook-id}.{webhook-timestamp}.{raw-json-body}
+```
+
+EasyMatrix also sets convenience headers:
+
+- `X-EasyMatrix-Webhook-ID`
+- `X-EasyMatrix-Delivery-ID`
+- `X-EasyMatrix-Event-ID`
+- `X-EasyMatrix-Event-Type`
+- `X-EasyMatrix-Attempt`
+- `X-EasyMatrix-Timestamp`
+- `X-EasyMatrix-Signature`
+
+### Retry behavior
+
+- Success: any `2xx` response.
+- Retryable failures: network errors, `408`, `429`, and `5xx`.
+- Non-retryable failures: other `4xx`.
+- Exponential backoff with jitter is configurable per webhook.
+- At-least-once delivery semantics (consumers should be idempotent).
+
+### Management endpoints
+
+All endpoints are authenticated under `/v1`:
+
+- `GET /v1/webhooks/events`
+- `POST /v1/webhooks`
+- `GET /v1/webhooks`
+- `GET /v1/webhooks/{webhookID}`
+- `PATCH /v1/webhooks/{webhookID}`
+- `DELETE /v1/webhooks/{webhookID}`
+- `POST /v1/webhooks/{webhookID}/test`
+- `GET /v1/webhooks/{webhookID}/deliveries`
+- `GET /v1/webhook-deliveries/{deliveryID}`
+- `POST /v1/webhook-deliveries/{deliveryID}/retry`
+
 ## CLI
 
 The package ships a small CLI wrapper:

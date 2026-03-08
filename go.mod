@@ -17,6 +17,7 @@ require (
 	github.com/SherClockHolmes/webpush-go v1.4.0 // indirect
 	github.com/alecthomas/chroma/v2 v2.22.0 // indirect
 	github.com/buckket/go-blurhash v1.1.0 // indirect
+	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.6.0 // indirect
 	github.com/disintegration/imaging v1.6.2 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
