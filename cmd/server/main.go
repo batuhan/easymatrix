@@ -25,7 +25,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create runtime: %v", err)
 	}
-	if err = runtime.Start(context.Background()); err != nil {
+	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
+	defer cancelRuntime()
+
+	if err = runtime.Start(runtimeCtx); err != nil {
 		log.Fatalf("failed to start gomuks runtime: %v", err)
 	}
 	defer runtime.Stop()
@@ -47,6 +50,7 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
+	cancelRuntime()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err = httpServer.Shutdown(shutdownCtx); err != nil {

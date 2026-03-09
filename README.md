@@ -109,6 +109,8 @@ Protected API routes require a logged-in Matrix session.
 
 This repo includes a root [Dockerfile](/Users/batuhan/Projects/labs/easymatrix/Dockerfile) and [railway.toml](/Users/batuhan/Projects/labs/easymatrix/railway.toml), so Railway builds a Go-only container from `./cmd/server` and healthchecks `GET /v1/info`. Bun is not used in the Railway deploy image.
 
+There is also a runtime-only [Dockerfile.ci](/Users/batuhan/Projects/labs/easymatrix/Dockerfile.ci) for pipelines that build `bin/easymatrix` first and only need a thin deploy image. It expects `bin/easymatrix` to already exist in the build context.
+
 Deploy button to enable after publishing the template:
 
 ```md

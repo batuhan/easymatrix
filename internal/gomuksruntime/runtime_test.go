@@ -1,6 +1,7 @@
 package gomuksruntime
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -38,4 +39,30 @@ func TestNewUsesExplicitStateDirAsGomuksRoot(t *testing.T) {
 	if got := rt.StateDir(); got != want {
 		t.Fatalf("unexpected state dir: got %q want %q", got, want)
 	}
+}
+
+func TestStartKeepsRuntimeAvailableWhenBootstrapFails(t *testing.T) {
+	root := t.TempDir()
+
+	rt, err := New(config.Config{
+		StateDir:          root,
+		MatrixRecoveryKey: "incorrect-ssss-key",
+	})
+	if err != nil {
+		t.Fatalf("failed to create runtime: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := rt.Start(ctx); err != nil {
+		t.Fatalf("expected startup to succeed without a pre-authenticated session, got %v", err)
+	}
+	defer rt.Stop()
+
+	if rt.Client() == nil {
+		t.Fatal("expected runtime client to be initialized")
+	}
+
+	cancel()
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -150,12 +151,16 @@ func (r *Runtime) Start(ctx context.Context) error {
 		return err
 	}
 	r.gmx = gmx
-	if err := r.bootstrapSessionFromEnv(ctx, gmx); err != nil {
-		r.gmx = nil
-		gmx.DirectStop()
-		return err
-	}
 	gmx.Log.Info().Str("state_dir", r.cfg.StateDir).Msg("gomuks runtime started")
+	if r.hasBootstrapEnv() {
+		go func() {
+			if err := r.bootstrapSessionFromEnv(ctx, gmx); err != nil {
+				log.Printf("gomuks bootstrap failed; continuing without a ready session: %v", err)
+				return
+			}
+			gmx.Log.Info().Msg("matrix bootstrap completed from environment")
+		}()
+	}
 	return nil
 }
 
@@ -229,6 +234,12 @@ func (r *Runtime) SubmitJSONCommand(ctx context.Context, cmd jsoncmd.Name, param
 
 func (r *Runtime) StateDir() string {
 	return r.dataDir
+}
+
+func (r *Runtime) hasBootstrapEnv() bool {
+	return strings.TrimSpace(r.cfg.MatrixLoginToken) != "" ||
+		(strings.TrimSpace(r.cfg.MatrixUsername) != "" && strings.TrimSpace(r.cfg.MatrixPassword) != "") ||
+		strings.TrimSpace(r.cfg.MatrixRecoveryKey) != ""
 }
 
 func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuks) error {
