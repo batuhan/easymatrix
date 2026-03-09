@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /manage/login-token", s.manage(s.manageLoginToken))
 	mux.Handle("POST /manage/login-custom", s.manage(s.manageLoginCustom))
 	mux.Handle("POST /manage/verify", s.manage(s.manageVerify))
+	mux.Handle("POST /manage/access-token", s.manage(s.manageIssueAccessToken))
 	mux.Handle("POST /manage/beeper/start-login", s.manage(s.manageBeeperStartLogin))
 	mux.Handle("POST /manage/beeper/request-code", s.manage(s.manageBeeperRequestCode))
 	mux.Handle("POST /manage/beeper/submit-code", s.manage(s.manageBeeperSubmitCode))

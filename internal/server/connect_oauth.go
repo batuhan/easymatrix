@@ -18,6 +18,8 @@ const (
 	oauthAuthorizationCodeTTL  = 5 * time.Minute
 	oauthAccessTokenTTL        = 24 * time.Hour
 	oauthDefaultClientName     = "Unknown Client"
+	oauthManageClientID        = "easymatrix-manage"
+	oauthManageClientName      = "EasyMatrix Manage"
 	oauthTokenTypeBearer       = "Bearer"
 	oauthCodeChallengeMethodS2 = "S256"
 )
@@ -219,6 +221,23 @@ func (s *Server) issueOAuthAccessToken(clientID string, scopes []string, resourc
 	s.oauthMu.Unlock()
 
 	return entry, nil
+}
+
+func (s *Server) issueManageAccessToken(resource string) (oauthAccessToken, error) {
+	s.oauthMu.Lock()
+	if _, ok := s.oauthClients[oauthManageClientID]; !ok {
+		s.oauthClients[oauthManageClientID] = oauthClient{
+			ClientID:                oauthManageClientID,
+			ClientName:              oauthManageClientName,
+			GrantTypes:              []string{"authorization_code"},
+			ResponseTypes:           []string{"code"},
+			Scope:                   "read write",
+			TokenEndpointAuthMethod: "none",
+			CreatedAt:               time.Now().Unix(),
+		}
+	}
+	s.oauthMu.Unlock()
+	return s.issueOAuthAccessToken(oauthManageClientID, []string{"read", "write"}, resource)
 }
 
 func (s *Server) createAuthorizationCode(

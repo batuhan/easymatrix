@@ -97,3 +97,35 @@ func TestInfoIncludesTypedMCPField(t *testing.T) {
 		t.Fatal("expected /v1/info to include endpoints.mcp")
 	}
 }
+
+func TestIssueManageAccessTokenCreatesUsableBearer(t *testing.T) {
+	cfg := config.Config{
+		ListenAddr:          "127.0.0.1:23373",
+		StateDir:            t.TempDir(),
+		MatrixHomeserverURL: "https://matrix.beeper.com",
+	}
+	rt, err := gomuksruntime.New(cfg)
+	if err != nil {
+		t.Fatalf("failed to create runtime: %v", err)
+	}
+	server := New(cfg, rt)
+
+	token, err := server.issueManageAccessToken("http://127.0.0.1:23373/v1")
+	if err != nil {
+		t.Fatalf("issueManageAccessToken returned error: %v", err)
+	}
+	if token.Value == "" {
+		t.Fatal("expected issued manage access token to have a value")
+	}
+	if token.ClientID != oauthManageClientID {
+		t.Fatalf("ClientID = %q, want %q", token.ClientID, oauthManageClientID)
+	}
+
+	info, ok := server.tokenInfoForBearer(token.Value)
+	if !ok || info == nil {
+		t.Fatal("expected issued manage access token to authenticate")
+	}
+	if len(info.Scopes) != 2 || info.Scopes[0] != "read" || info.Scopes[1] != "write" {
+		t.Fatalf("unexpected scopes: %#v", info.Scopes)
+	}
+}

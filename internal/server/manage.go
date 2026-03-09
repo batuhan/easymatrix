@@ -240,6 +240,26 @@ func (s *Server) manageVerify(w http.ResponseWriter, r *http.Request) error {
 	return writeJSON(w, state)
 }
 
+func (s *Server) manageIssueAccessToken(w http.ResponseWriter, r *http.Request) error {
+	if err := s.requireLoggedInSession(); err != nil {
+		return err
+	}
+
+	resource := s.requestBaseURL(r) + "/v1"
+	token, err := s.issueManageAccessToken(resource)
+	if err != nil {
+		return errs.Internal(fmt.Errorf("failed to issue manage access token: %w", err))
+	}
+
+	return writeJSON(w, map[string]any{
+		"access_token": token.Value,
+		"token_type":   token.TokenType,
+		"expires_in":   int64(oauthAccessTokenTTL.Seconds()),
+		"scope":        oauthScopeString(token.Scopes),
+		"resource":     resource,
+	})
+}
+
 func (s *Server) manageBeeperStartLogin(w http.ResponseWriter, r *http.Request) error {
 	var req struct {
 		Domain string `json:"domain"`
@@ -506,6 +526,16 @@ const manageHTML = `<!doctype html>
     </div>
 
     <div class="card">
+      <h2>EasyMatrix API Token</h2>
+      <div class="muted" style="margin-bottom: 8px;">This mints a local EasyMatrix bearer token for <code>/v1/*</code>. It is not your Matrix homeserver token.</div>
+      <div class="inline" style="margin-bottom: 10px; flex-wrap: wrap;">
+        <button id="api-token-generate" style="width: auto;">Generate API Token</button>
+        <span id="api-token-hint" class="muted">Log in first, then mint a token for API calls.</span>
+      </div>
+      <pre id="api-token-result">No token generated in this browser session.</pre>
+    </div>
+
+    <div class="card">
       <h2>Beeper Email Login</h2>
       <div class="muted" style="margin-bottom: 8px;">Same flow gomuks uses: request code, submit code, then JWT login.</div>
       <div class="row">
@@ -557,7 +587,8 @@ const manageHTML = `<!doctype html>
     </div>
 
     <div class="card">
-      <h2>JWT / Login Token</h2>
+      <h2>Matrix Login Token / JWT</h2>
+      <div class="muted" style="margin-bottom: 8px;">Use this only to sign EasyMatrix into Matrix. It is not the bearer token you send to <code>/v1/*</code>.</div>
       <div class="row">
         <div>
           <label for="jwt-hs">Homeserver URL</label>
@@ -571,7 +602,7 @@ const manageHTML = `<!doctype html>
           </select>
         </div>
         <div>
-          <label for="jwt-token">Login token</label>
+          <label for="jwt-token">Matrix login token</label>
           <input id="jwt-token" placeholder="eyJ...">
         </div>
       </div>
@@ -789,13 +820,18 @@ const manageHTML = `<!doctype html>
       const data = await api("/manage/state");
       document.getElementById("state-json").textContent = pretty(data);
       const cs = data && data.client_state ? data.client_state : {};
+      const isLoggedIn = Boolean(cs.is_logged_in);
       const flags = [
         "initialized=" + Boolean(cs.is_initialized),
-        "logged_in=" + Boolean(cs.is_logged_in),
+        "logged_in=" + isLoggedIn,
         "verified=" + Boolean(cs.is_verified),
         "homeserver=" + String(data.homeserver_host || "")
       ];
       document.getElementById("state-badges").textContent = flags.join(" | ");
+      document.getElementById("api-token-generate").disabled = !isLoggedIn;
+      document.getElementById("api-token-hint").textContent = isLoggedIn
+        ? "Generate a local bearer token for Authorization: Bearer ..."
+        : "Log in first, then mint a token for API calls.";
       return data;
     }
 
@@ -811,6 +847,13 @@ const manageHTML = `<!doctype html>
 
     document.getElementById("refresh-state").addEventListener("click", function () {
       run(refreshState);
+    });
+
+    document.getElementById("api-token-generate").addEventListener("click", function () {
+      run(async function () {
+        const result = await api("/manage/access-token", {});
+        document.getElementById("api-token-result").textContent = pretty(result) + "\n\ncurl -H \"Authorization: Bearer " + String(result.access_token || "") + "\" " + String(result.resource || "").replace(/\/$/, "") + "/chats";
+      });
     });
 
     document.getElementById("beeper-request").addEventListener("click", function () {
