@@ -5,3 +5,17 @@ dist
 bin
 coverage
 .DS_Store
+.env
+.env.*
+bun.lock
+cli.mjs
+examples
+LICENSE
+package.json
+README.md
+railway.toml
+scripts
+src
+test
+tsconfig*.json
+*.sh
