@@ -20,7 +20,6 @@ WORKDIR /data
 
 COPY --from=build /out/easymatrix /usr/local/bin/easymatrix
 
-VOLUME ["/data"]
 ENV GOMUKS_ROOT=/data/gomuks
 
 EXPOSE 8080
