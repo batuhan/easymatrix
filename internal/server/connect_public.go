@@ -61,7 +61,7 @@ func (s *Server) openAPISpec(w http.ResponseWriter, r *http.Request) error {
 func (s *Server) info(w http.ResponseWriter, r *http.Request) error {
 	baseURL := s.requestBaseURL(r)
 	serverStatus := "ready"
-	if err := s.requireBeeperHomeserver(); err != nil {
+	if err := s.requireLoggedInSession(); err != nil {
 		serverStatus = "not_ready"
 	}
 	listenHost, listenPort, splitErr := net.SplitHostPort(s.cfg.ListenAddr)

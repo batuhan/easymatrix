@@ -128,7 +128,7 @@ func (s *Server) handle(mux *http.ServeMux, pattern string, handler apiHandler, 
 
 func (s *Server) wrap(handler apiHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := s.requireBeeperHomeserver(); err != nil {
+		if err := s.requireLoggedInSession(); err != nil {
 			errs.Write(w, err)
 			return
 		}
@@ -162,25 +162,12 @@ func (s *Server) manage(handler apiHandler) http.Handler {
 	})
 }
 
-func (s *Server) requireBeeperHomeserver() error {
+func (s *Server) requireLoggedInSession() error {
 	cli := s.rt.Client()
 	if cli == nil || cli.Account == nil || cli.Client == nil || cli.Client.HomeserverURL == nil {
-		return errs.Forbidden("A logged-in Beeper Matrix session is required")
+		return errs.Forbidden("A logged-in Matrix session is required")
 	}
-	hostname := strings.ToLower(strings.TrimSpace(cli.Client.HomeserverURL.Hostname()))
-	if isAllowedBeeperHomeserverHost(hostname) {
-		return nil
-	}
-	return errs.Forbidden("Only Beeper homeserver sessions are supported")
-}
-
-func isAllowedBeeperHomeserverHost(hostname string) bool {
-	switch hostname {
-	case "matrix.beeper.com", "matrix.beeper-staging.com", "matrix.beeper-dev.com":
-		return true
-	default:
-		return false
-	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, value any) error {

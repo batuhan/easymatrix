@@ -235,7 +235,7 @@ async function startServer(name, port, account, rootDir) {
   await waitFor(async () => {
     const state = await fetchJSON(`${baseURL}/manage/state`);
     const clientState = state?.client_state ?? {};
-    if (!clientState.is_logged_in || !clientState.is_verified || !state?.is_beeper_homeserver) {
+    if (!clientState.is_logged_in || !clientState.is_verified || !state?.homeserver_host) {
       throw new Error("session not ready yet");
     }
     return state;

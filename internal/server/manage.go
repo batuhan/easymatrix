@@ -19,9 +19,8 @@ import (
 const beeperPrivateAPIAuthHeader = "Bearer BEEPER-PRIVATE-API-PLEASE-DONT-USE"
 
 type manageStateOutput struct {
-	ClientState        *jsoncmd.ClientState `json:"client_state"`
-	HomeserverHost     string               `json:"homeserver_host,omitempty"`
-	IsBeeperHomeserver bool                 `json:"is_beeper_homeserver"`
+	ClientState    *jsoncmd.ClientState `json:"client_state"`
+	HomeserverHost string               `json:"homeserver_host,omitempty"`
 }
 
 func (s *Server) manageUI(w http.ResponseWriter, r *http.Request) error {
@@ -52,7 +51,6 @@ func (s *Server) getManageState() (manageStateOutput, error) {
 	if client.Client.HomeserverURL != nil {
 		host := strings.ToLower(strings.TrimSpace(client.Client.HomeserverURL.Hostname()))
 		state.HomeserverHost = host
-		state.IsBeeperHomeserver = isAllowedBeeperHomeserverHost(host)
 	}
 	return state, nil
 }
@@ -795,7 +793,7 @@ const manageHTML = `<!doctype html>
         "initialized=" + Boolean(cs.is_initialized),
         "logged_in=" + Boolean(cs.is_logged_in),
         "verified=" + Boolean(cs.is_verified),
-        "beeper_hs=" + Boolean(data.is_beeper_homeserver)
+        "homeserver=" + String(data.homeserver_host || "")
       ];
       document.getElementById("state-badges").textContent = flags.join(" | ");
       return data;

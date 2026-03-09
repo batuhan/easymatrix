@@ -9,6 +9,10 @@ It has two modes:
 
 The repo is still experimental. The public API is not treated as stable yet.
 
+## License
+
+EasyMatrix is licensed under the GNU Affero General Public License, version 3 or later (`AGPL-3.0-or-later`), matching `gomuks`.
+
 ## What It Covers
 
 - `v1` Desktop API routes for accounts, chats, messages, assets, contacts, search, focus, info, and websocket events
@@ -65,7 +69,6 @@ Once running:
 gomuks-compatible overrides:
 
 - `GOMUKS_ROOT`: use a specific gomuks root with `config/`, `data/`, `cache/`, and `logs/`
-- `MATRIX_STATE_DIR`: alias for `GOMUKS_ROOT`
 - `GOMUKS_CONFIG_HOME`
 - `GOMUKS_DATA_HOME`
 - `GOMUKS_CACHE_HOME`
@@ -100,7 +103,7 @@ Supported flows:
 
 If `MATRIX_LOGIN_TOKEN` or `MATRIX_USERNAME` / `MATRIX_PASSWORD` are set, plus `MATRIX_RECOVERY_KEY`, the runtime will attempt to bootstrap the session automatically on startup.
 
-Protected API routes require a logged-in Beeper homeserver session.
+Protected API routes require a logged-in Matrix session.
 
 ## Railway
 
@@ -117,25 +120,22 @@ For a template, configure the Railway service like this in the template composer
 - Source repo: this repository
 - Public networking: enabled
 - Volume: attached to the service at `/data`
-- Required variables: `MATRIX_HOMESERVER_URL`, `MATRIX_USERNAME`, `MATRIX_PASSWORD`
+- Required variables: `MATRIX_USERNAME`, `MATRIX_PASSWORD`
 - Required secret: `EASYMATRIX_MANAGE_SECRET`
 
 Recommended template defaults:
 
 - `MATRIX_ALLOW_QUERY_TOKEN=false`
-- `MATRIX_ACCESS_TOKEN`: set this to a generated random secret in the template before publishing so deployers do not need to provide it manually
 - Optional `MATRIX_RECOVERY_KEY` for fully automatic bootstrap, otherwise finish setup in `/manage`
 
 With that setup, EasyMatrix will automatically persist gomuks state under `/data/gomuks`.
 
 Suggested template variable setup:
 
-- `MATRIX_HOMESERVER_URL`: required, default `https://matrix.beeper.com`
+- `MATRIX_HOMESERVER_URL`: optional, default `https://matrix.beeper.com`
 - `MATRIX_USERNAME`: required, no default
 - `MATRIX_PASSWORD`: required, no default
-- `EASYMATRIX_MANAGE_SECRET`: required, use `${{ secret(32) }}`
-- `MATRIX_ACCESS_TOKEN`: optional for deployers, set template default to `${{ secret(32) }}`
-- `MATRIX_ALLOW_QUERY_TOKEN`: default `false`
+- `EASYMATRIX_MANAGE_SECRET`: required, use a generated secret
 - `MATRIX_RECOVERY_KEY`: optional
 
 Suggested publish flow:
@@ -323,5 +323,5 @@ go test ./...
 
 - EasyMatrix embeds `go.mau.fi/gomuks` as a library; it does not shell out to a separate gomuks process in normal server mode.
 - Account discovery for local bridges is inferred from `com.beeper.local_bridge_state`.
-- The implementation is intentionally Beeper-specific and only accepts Beeper homeserver sessions.
+- The default bootstrap homeserver is `https://matrix.beeper.com`, but any Matrix homeserver session is accepted.
 - The JS package and route surface may still change while the project is being shaped.

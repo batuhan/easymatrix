@@ -85,9 +85,6 @@ func resolveStateDir() string {
 	if root := strings.TrimSpace(os.Getenv("GOMUKS_ROOT")); root != "" {
 		return root
 	}
-	if stateDir := strings.TrimSpace(os.Getenv("MATRIX_STATE_DIR")); stateDir != "" {
-		return stateDir
-	}
 	if mountPath := strings.TrimSpace(os.Getenv("RAILWAY_VOLUME_MOUNT_PATH")); mountPath != "" {
 		return filepath.Join(mountPath, "gomuks")
 	}

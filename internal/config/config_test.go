@@ -6,7 +6,6 @@ func TestLoadUsesRailwayPortWhenListenAddrUnset(t *testing.T) {
 	t.Setenv("MATRIX_API_LISTEN", "")
 	t.Setenv("PORT", "8080")
 	t.Setenv("GOMUKS_ROOT", "")
-	t.Setenv("MATRIX_STATE_DIR", "")
 	t.Setenv("RAILWAY_VOLUME_MOUNT_PATH", "")
 
 	cfg, err := Load()
@@ -22,7 +21,6 @@ func TestLoadUsesRailwayVolumeMountWhenStateDirUnset(t *testing.T) {
 	t.Setenv("MATRIX_API_LISTEN", "")
 	t.Setenv("PORT", "")
 	t.Setenv("GOMUKS_ROOT", "")
-	t.Setenv("MATRIX_STATE_DIR", "")
 	t.Setenv("RAILWAY_VOLUME_MOUNT_PATH", "/data")
 
 	cfg, err := Load()
@@ -38,7 +36,6 @@ func TestLoadUsesManageSecret(t *testing.T) {
 	t.Setenv("MATRIX_API_LISTEN", "")
 	t.Setenv("PORT", "")
 	t.Setenv("GOMUKS_ROOT", "")
-	t.Setenv("MATRIX_STATE_DIR", "")
 	t.Setenv("RAILWAY_VOLUME_MOUNT_PATH", "")
 	t.Setenv("EASYMATRIX_MANAGE_SECRET", "super-secret")
 
