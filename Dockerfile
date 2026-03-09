@@ -9,14 +9,14 @@ RUN apt-get update \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
+RUN --mount=type=cache,id=easymatrix-go-mod,target=/go/pkg/mod \
 	go mod download
 
 COPY cmd ./cmd
 COPY internal ./internal
 
-RUN --mount=type=cache,target=/go/pkg/mod \
-	--mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,id=easymatrix-go-mod,target=/go/pkg/mod \
+	--mount=type=cache,id=easymatrix-go-build,target=/root/.cache/go-build \
 	CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/easymatrix ./cmd/server
 
 FROM debian:bookworm-slim AS runtime
