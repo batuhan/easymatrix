@@ -59,6 +59,10 @@ type SearchChatsOutput = ListChatsOutput
 type ListMessagesOutput struct {
 	Items   []Message `json:"items"`
 	HasMore bool      `json:"hasMore"`
+	// LastReadByOtherSortKey is the sortKey of the furthest message that at least
+	// one other participant has read. Outgoing messages with sortKey <= this value
+	// have been seen by the other side. Empty string if no read receipt exists.
+	LastReadByOtherSortKey string `json:"lastReadByOtherSortKey,omitempty"`
 }
 
 type SearchMessagesOutput struct {

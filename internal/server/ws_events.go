@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +37,7 @@ const (
 	wsDomainTypeChatDeleted      = "chat.deleted"
 	wsDomainTypeMessageUpserted  = "message.upserted"
 	wsDomainTypeMessageDeleted   = "message.deleted"
+	wsDomainTypeReceiptUpdated   = "receipt.updated"
 	wsErrorType                  = "error"
 	wsErrorCodeInvalidCommand    = "INVALID_COMMAND"
 	wsErrorCodeInvalidPayload    = "INVALID_PAYLOAD"
@@ -289,6 +291,12 @@ func (h *wsHub) processSyncComplete(syncComplete *jsoncmd.SyncComplete) {
 			}
 			entries = hydrated
 		}
+		if domainEvent.Type == wsDomainTypeReceiptUpdated {
+			hydrated, err := h.server.hydrateReceiptForWSEvent(domainEvent.ChatID)
+			if err == nil && hydrated != nil {
+				entries = []compatRecord{hydrated}
+			}
+		}
 
 		now := time.Now().UTC()
 		if h.dropDuplicate(domainEvent, entries, now) {
@@ -437,6 +445,22 @@ func (s *Server) hydrateMessagesForWSEvent(chatID string, messageIDs []string) (
 	return output, nil
 }
 
+func (s *Server) hydrateReceiptForWSEvent(chatID string) (compatRecord, error) {
+	roomID := id.RoomID(chatID)
+	otherReceipts, err := s.loadOtherReadReceipts(context.Background(), roomID)
+	if err != nil {
+		return nil, err
+	}
+	maxRead := computeMaxOtherRead(otherReceipts)
+	if maxRead == 0 {
+		return nil, nil
+	}
+	return compatRecord{
+		"chatID":                 chatID,
+		"lastReadByOtherSortKey": strconv.FormatInt(maxRead, 10),
+	}, nil
+}
+
 func toCompatRecord(value any) (compatRecord, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -478,12 +502,14 @@ func (s *Server) wsEvents(w http.ResponseWriter, r *http.Request) error {
 		if readErr != nil {
 			return nil
 		}
-		if messageType != websocket.MessageText {
+		// Accept both text and binary messages — some clients (e.g., Apple's
+		// URLSessionWebSocketTask) send JSON payloads as binary (.data) frames.
+		if messageType != websocket.MessageText && messageType != websocket.MessageBinary {
 			ctx, cancel := context.WithTimeout(context.Background(), wsDefaultWriteTimeout)
 			_ = wsjson.Write(ctx, conn, wsErrorMessage{
 				Type:    wsErrorType,
 				Code:    wsErrorCodeInvalidPayload,
-				Message: "Payload must be a JSON text message",
+				Message: "Payload must be a JSON text or binary message",
 			})
 			cancel()
 			continue
@@ -722,6 +748,16 @@ func mapSyncCompleteToDomainEvents(syncComplete *jsoncmd.SyncComplete) []wsDomai
 				evtType == event.StateTopic.Type:
 				chatTouched = true
 			}
+		}
+
+		// Emit receipt.updated if new receipts arrived.
+		if len(roomSync.Receipts) > 0 {
+			output = append(output, wsDomainEvent{
+				Type:   wsDomainTypeReceiptUpdated,
+				ChatID: chatID,
+				IDs:    []string{chatID},
+			})
+			chatTouched = true
 		}
 
 		if chatTouched {

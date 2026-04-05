@@ -66,6 +66,12 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) error {
 		return errs.NotFound("Chat not found")
 	}
 
+	lastReadKey := s.loadLastReadSortKey(r.Context(), id.RoomID(chatID))
+	var lastReadInt int64
+	if lastReadKey != "" {
+		lastReadInt, _ = strconv.ParseInt(lastReadKey, 10, 64)
+	}
+
 	messages := make([]compat.Message, 0, messagePageSize+1)
 	var hasMore bool
 	nextCursor := cursorValue
@@ -101,6 +107,13 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) error {
 			if mapErr != nil {
 				continue
 			}
+			// Mark messages as unread based on read receipt.
+			if lastReadInt > 0 && !mapped.IsSender {
+				sortKeyInt, _ := strconv.ParseInt(mapped.SortKey, 10, 64)
+				if sortKeyInt > lastReadInt {
+					mapped.IsUnread = true
+				}
+			}
 			messages = append(messages, mapped)
 			if len(messages) > messagePageSize {
 				break
@@ -117,7 +130,22 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) error {
 		messages = messages[:messagePageSize]
 		hasMore = true
 	}
-	return writeJSON(w, compat.ListMessagesOutput{Items: messages, HasMore: hasMore})
+
+	// Load other participants' read receipts to determine the "read by other" position.
+	var lastReadByOtherSortKey string
+	otherReceipts, _ := s.loadOtherReadReceipts(r.Context(), id.RoomID(chatID))
+	if len(otherReceipts) > 0 {
+		maxOtherRead := computeMaxOtherRead(otherReceipts)
+		if maxOtherRead != 0 {
+			lastReadByOtherSortKey = strconv.FormatInt(maxOtherRead, 10)
+		}
+	}
+
+	return writeJSON(w, compat.ListMessagesOutput{
+		Items:                  messages,
+		HasMore:                hasMore,
+		LastReadByOtherSortKey: lastReadByOtherSortKey,
+	})
 }
 
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) error {
@@ -496,6 +524,23 @@ func (s *Server) mapEventToMessage(ctx context.Context, evt *database.Event, roo
 	}
 
 	accountID, _ := inferAccountForRoom(room.ID, lookup)
+	// Try member-based inference if server part didn't match.
+	if accountID == "hungryserv" || accountID == "" {
+		if reactions.Names != nil {
+			// Build minimal participant list from names map for inference.
+			tempParticipants := make([]compat.User, 0, len(reactions.Names))
+			selfUserID := ""
+			if cli := s.rt.Client(); cli != nil && cli.Account != nil {
+				selfUserID = string(cli.Account.UserID)
+			}
+			for uid := range reactions.Names {
+				tempParticipants = append(tempParticipants, compat.User{ID: uid, IsSelf: uid == selfUserID})
+			}
+			if memberAccID, _, ok := inferAccountFromMembers(tempParticipants, selfUserID, lookup); ok {
+				accountID = memberAccID
+			}
+		}
+	}
 	message := compat.Message{
 		ID:        string(evt.ID),
 		ChatID:    string(evt.RoomID),
@@ -579,6 +624,8 @@ func messageAttachment(content event.MessageEventContent, evtType string) (compa
 	uri := string(content.URL)
 	if uri == "" && content.File != nil {
 		uri = string(content.File.URL)
+		// Register the encryption info so the asset serve endpoint can decrypt.
+		registerEncryptedFile(uri, content.File)
 	}
 	att := compat.Attachment{
 		ID:       uri,
@@ -608,6 +655,7 @@ func messageAttachment(content event.MessageEventContent, evtType string) (compa
 		att.Type = compat.AttachmentType("video")
 	case event.MsgAudio:
 		att.Type = compat.AttachmentType("audio")
+		att.IsVoiceNote = content.MSC3245Voice != nil
 	case "m.sticker":
 		att.Type = compat.AttachmentType("img")
 		att.IsSticker = true

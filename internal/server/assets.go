@@ -20,16 +20,54 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
 	"github.com/batuhan/easymatrix/internal/compat"
 	errs "github.com/batuhan/easymatrix/internal/errors"
 )
 
+// encryptedFileRegistry caches EncryptedFile info for mxc URLs so
+// the serve endpoint can decrypt media fetched from the homeserver.
+var (
+	encryptedFileMu       sync.RWMutex
+	encryptedFileRegistry = make(map[string]*event.EncryptedFileInfo)
+)
+
+func registerEncryptedFile(mxcURL string, file *event.EncryptedFileInfo) {
+	if file == nil || mxcURL == "" {
+		return
+	}
+	encryptedFileMu.Lock()
+	encryptedFileRegistry[mxcURL] = file
+	encryptedFileMu.Unlock()
+}
+
+func lookupEncryptedFile(mxcURL string) *event.EncryptedFileInfo {
+	encryptedFileMu.RLock()
+	defer encryptedFileMu.RUnlock()
+	return encryptedFileRegistry[mxcURL]
+}
+
 const maxUploadSizeBytes = int64(500 * 1024 * 1024)
 
 var safeUploadIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// uploadAssetResponse is a custom type that omits zero-value fields
+// (the library type includes "error":"" which Swift treats as non-nil error).
+type uploadAssetResponse struct {
+	UploadID string  `json:"uploadID"`
+	SrcURL   string  `json:"srcURL,omitempty"`
+	FileName string  `json:"fileName,omitempty"`
+	MimeType string  `json:"mimeType,omitempty"`
+	FileSize float64 `json:"fileSize,omitempty"`
+	Width    float64 `json:"width,omitempty"`
+	Height   float64 `json:"height,omitempty"`
+	Duration float64 `json:"duration,omitempty"`
+	Error    string  `json:"error,omitempty"`
+}
 
 type uploadMetadata struct {
 	UploadID string  `json:"uploadID"`
@@ -134,7 +172,7 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 		return errs.Internal(err)
 	}
 
-	return writeJSON(w, compat.UploadAssetOutput{
+	return writeJSON(w, uploadAssetResponse{
 		UploadID: uploadID,
 		SrcURL:   fileURLFromPath(filePath),
 		FileName: fileName,
@@ -238,19 +276,21 @@ func (s *Server) resolveAssetURL(ctx context.Context, raw string) (string, error
 	}
 	defer resp.Body.Close()
 
-	tempPath := cachePath + ".tmp"
-	file, err := os.Create(tempPath)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp asset file: %w", err)
+		return "", fmt.Errorf("failed to read downloaded asset: %w", err)
 	}
-	if _, err = io.Copy(file, resp.Body); err != nil {
-		_ = file.Close()
-		_ = os.Remove(tempPath)
+
+	// Decrypt if we have encryption info for this mxc URL.
+	if encFile := lookupEncryptedFile(normalized); encFile != nil {
+		if decryptErr := encFile.DecryptInPlace(data); decryptErr != nil {
+			return "", fmt.Errorf("failed to decrypt asset: %w", decryptErr)
+		}
+	}
+
+	tempPath := cachePath + ".tmp"
+	if err = os.WriteFile(tempPath, data, 0o600); err != nil {
 		return "", fmt.Errorf("failed to save downloaded asset: %w", err)
-	}
-	if closeErr := file.Close(); closeErr != nil {
-		_ = os.Remove(tempPath)
-		return "", fmt.Errorf("failed to close downloaded asset: %w", closeErr)
 	}
 	if err = os.Rename(tempPath, cachePath); err != nil {
 		_ = os.Remove(tempPath)
