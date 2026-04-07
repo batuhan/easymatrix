@@ -267,7 +267,18 @@ func (s *Server) resolveAssetURL(ctx context.Context, raw string) (string, error
 	sum := sha256.Sum256([]byte(normalized))
 	cachePath := filepath.Join(cacheDir, hex.EncodeToString(sum[:]))
 	if _, err := os.Stat(cachePath); err == nil {
-		return cachePath, nil
+		// If encryption info exists for this URL, the cached file may have been
+		// stored before the key was registered (encrypted blob cached as-is).
+		// Validate the cache: if the file doesn't look like decrypted media, discard it.
+		if encFile := lookupEncryptedFile(normalized); encFile != nil {
+			if !looksDecrypted(cachePath) {
+				_ = os.Remove(cachePath)
+			} else {
+				return cachePath, nil
+			}
+		} else {
+			return cachePath, nil
+		}
 	}
 
 	resp, err := s.rt.Client().Client.Download(ctx, parsedMXC)
@@ -373,6 +384,45 @@ func (s *Server) isAllowedServePath(path string) bool {
 	}
 	return strings.HasPrefix(absPath, uploadRoot+string(os.PathSeparator)) ||
 		strings.HasPrefix(absPath, assetRoot+string(os.PathSeparator))
+}
+
+// looksDecrypted performs a quick sanity check on a cached file.
+// Encrypted media blobs won't start with any known media magic bytes.
+func looksDecrypted(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	header := make([]byte, 12)
+	n, _ := io.ReadFull(f, header)
+	if n < 4 {
+		return false
+	}
+	h := header[:n]
+	switch {
+	case h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF: // JPEG
+		return true
+	case h[0] == 0x89 && h[1] == 'P' && h[2] == 'N' && h[3] == 'G': // PNG
+		return true
+	case h[0] == 'G' && h[1] == 'I' && h[2] == 'F': // GIF
+		return true
+	case h[0] == 'R' && h[1] == 'I' && h[2] == 'F' && h[3] == 'F': // WEBP/WAV
+		return true
+	case n >= 8 && string(h[4:8]) == "ftyp": // MP4/MOV/M4A
+		return true
+	case n >= 4 && h[0] == 0x1A && h[1] == 0x45 && h[2] == 0xDF && h[3] == 0xA3: // WEBM/MKV
+		return true
+	case h[0] == 'O' && h[1] == 'g' && h[2] == 'g' && h[3] == 'S': // OGG
+		return true
+	case h[0] == 'I' && h[1] == 'D' && h[2] == '3': // MP3 (ID3)
+		return true
+	case h[0] == 0xFF && (h[1]&0xE0) == 0xE0: // MP3 (sync)
+		return true
+	case n >= 4 && h[0] == '%' && h[1] == 'P' && h[2] == 'D' && h[3] == 'F': // PDF
+		return true
+	}
+	return false
 }
 
 func randomID() string {

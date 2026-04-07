@@ -622,9 +622,13 @@ func messageAttachment(content event.MessageEventContent, evtType string) (compa
 		return compat.Attachment{}, false
 	}
 	uri := string(content.URL)
-	if uri == "" && content.File != nil {
-		uri = string(content.File.URL)
+	if content.File != nil {
+		if uri == "" {
+			uri = string(content.File.URL)
+		}
 		// Register the encryption info so the asset serve endpoint can decrypt.
+		// Note: some events have both content.URL and content.File set to the
+		// same mxc:// URL (e.g. own outbound messages in encrypted rooms).
 		registerEncryptedFile(uri, content.File)
 	}
 	att := compat.Attachment{
