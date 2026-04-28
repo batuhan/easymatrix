@@ -30,8 +30,6 @@ COPY --from=build /out/easymatrix /usr/local/bin/easymatrix
 
 ENV GOMUKS_ROOT=/data/gomuks
 
-USER easymatrix:easymatrix
-
 EXPOSE 8080
 
 CMD ["easymatrix"]
