@@ -72,11 +72,11 @@ func loadDotEnv() error {
 }
 
 func resolveListenAddr() string {
-	if listenAddr := strings.TrimSpace(os.Getenv("MATRIX_API_LISTEN")); listenAddr != "" {
-		return listenAddr
-	}
 	if port := strings.TrimSpace(os.Getenv("PORT")); port != "" {
 		return net.JoinHostPort("0.0.0.0", port)
+	}
+	if listenAddr := strings.TrimSpace(os.Getenv("MATRIX_API_LISTEN")); listenAddr != "" {
+		return listenAddr
 	}
 	return defaultListenAddr
 }

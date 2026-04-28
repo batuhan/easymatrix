@@ -17,6 +17,21 @@ func TestLoadUsesRailwayPortWhenListenAddrUnset(t *testing.T) {
 	}
 }
 
+func TestLoadPrefersRailwayPortOverListenAddr(t *testing.T) {
+	t.Setenv("MATRIX_API_LISTEN", "0.0.0.0:23373")
+	t.Setenv("PORT", "8080")
+	t.Setenv("GOMUKS_ROOT", "")
+	t.Setenv("RAILWAY_VOLUME_MOUNT_PATH", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if got, want := cfg.ListenAddr, "0.0.0.0:8080"; got != want {
+		t.Fatalf("ListenAddr = %q, want %q", got, want)
+	}
+}
+
 func TestLoadUsesRailwayVolumeMountWhenStateDirUnset(t *testing.T) {
 	t.Setenv("MATRIX_API_LISTEN", "")
 	t.Setenv("PORT", "")
