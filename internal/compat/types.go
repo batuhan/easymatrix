@@ -26,6 +26,10 @@ type Chat struct {
 	beeperdesktopapi.Chat
 	// Extension for current renderer expectations.
 	Network string `json:"network,omitempty"`
+	// Chat-level image (Matrix m.room.avatar). Used by clients to show a real
+	// group photo instead of a participant collage. Empty when the room has
+	// no explicit avatar.
+	ImgURL string `json:"imgURL,omitempty"`
 	// List chats includes an optional preview object.
 	Preview *Message `json:"preview,omitempty"`
 	// Desktop-side consumers treat marked unread separately from unreadCount.
@@ -59,6 +63,10 @@ type SearchChatsOutput = ListChatsOutput
 type ListMessagesOutput struct {
 	Items   []Message `json:"items"`
 	HasMore bool      `json:"hasMore"`
+	// LastReadByOtherSortKey is the sortKey of the furthest message that at least
+	// one other participant has read. Outgoing messages with sortKey <= this value
+	// have been seen by the other side. Empty string if no read receipt exists.
+	LastReadByOtherSortKey string `json:"lastReadByOtherSortKey,omitempty"`
 }
 
 type SearchMessagesOutput struct {
