@@ -26,6 +26,10 @@ type Chat struct {
 	beeperdesktopapi.Chat
 	// Extension for current renderer expectations.
 	Network string `json:"network,omitempty"`
+	// Chat-level image (Matrix m.room.avatar). Used by clients to show a real
+	// group photo instead of a participant collage. Empty when the room has
+	// no explicit avatar.
+	ImgURL string `json:"imgURL,omitempty"`
 	// List chats includes an optional preview object.
 	Preview *Message `json:"preview,omitempty"`
 	// Desktop-side consumers treat marked unread separately from unreadCount.

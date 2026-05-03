@@ -549,6 +549,11 @@ func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup 
 	chat.AccountID = accountID
 	chat.Title = title
 	chat.Type = compat.ChatType(chatType)
+	if room.Avatar != nil {
+		if avatarURL := room.Avatar.String(); avatarURL != "" && avatarURL != "mxc://" {
+			chat.ImgURL = avatarURL
+		}
+	}
 	chat.Participants = compat.Participants{
 		Items:   filteredParticipants,
 		HasMore: hasMoreParticipants,
